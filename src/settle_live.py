@@ -91,4 +91,4 @@ if __name__ == "__main__":
     text = summary(day)
     print(text)
     if a.notify:
-        send(text)
+        send(text, room="📊 毎日のまとめ")

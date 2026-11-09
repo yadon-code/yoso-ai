@@ -10,6 +10,7 @@
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -26,19 +27,46 @@ def _webhook():
     return url
 
 
-def send(text: str) -> bool:
-    """Discordに送る。送れたらTrue。2000文字を超える分は分けて送る。"""
+THREADS = ROOT / "data" / "discord_threads.json"  # フォーラムの部屋の名前 → 部屋のID
+
+
+def _post(url, payload):
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json",
+                                                          "User-Agent": "yoso-ai"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        t = r.read().decode("utf-8") or "{}"
+    return json.loads(t)
+
+
+def send(text: str, room: str = "📢 お知らせ") -> bool:
+    """Discordに送る。送れたらTrue。
+    通知役（ウェブフック）がフォーラムチャンネルにある場合は、room の名前の部屋（投稿）に送る。
+    部屋がなければ作り、IDを data/discord_threads.json に覚えておく。
+    普通のチャンネルにある場合は、そのチャンネルにそのまま送る。"""
     url = _webhook()
     if not url:
-        print("[通知（未設定なので表示だけ）]\n" + text, flush=True)
+        print(f"[通知（未設定なので表示だけ）] {room}\n" + text, flush=True)
         return False
+    threads = json.loads(THREADS.read_text(encoding="utf-8")) if THREADS.exists() else {}
     ok = True
     for i in range(0, len(text), 1900):
-        body = json.dumps({"content": text[i:i + 1900]}).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json",
-                                                              "User-Agent": "yoso-ai"})
+        chunk = {"content": text[i:i + 1900]}
         try:
-            urllib.request.urlopen(req, timeout=20).read()
+            if room in threads:
+                _post(f"{url}?wait=true&thread_id={threads[room]}", chunk)
+            else:
+                try:  # フォーラムなら新しい部屋を作る
+                    res = _post(f"{url}?wait=true", {**chunk, "thread_name": room})
+                    tid = res.get("channel_id")
+                    if tid:
+                        threads[room] = tid
+                        THREADS.parent.mkdir(parents=True, exist_ok=True)
+                        THREADS.write_text(json.dumps(threads, ensure_ascii=False, indent=1), encoding="utf-8")
+                except urllib.error.HTTPError as e:
+                    if e.code != 400:
+                        raise
+                    _post(f"{url}?wait=true", chunk)  # 普通のチャンネル
         except Exception as e:  # 通知の失敗で予想を止めない
             print("通知に失敗:", e, flush=True)
             ok = False

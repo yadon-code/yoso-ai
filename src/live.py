@@ -204,7 +204,7 @@ def main():
         print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
               f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}", flush=True)
         if picks and has_ex and not a.no_notify:
-            send(race_message(r.venue, r.race_no, r.deadline, p, picks))
+            send(race_message(r.venue, r.race_no, r.deadline, p, picks), room=f"🚤 {r.venue}")
 
     # 最終レースの結果が出るころ（締切から20分後）に、1日のまとめを通知する
     if not a.once and not a.no_notify and len(sched):
@@ -212,7 +212,7 @@ def main():
         now = dt.datetime.now(JST)
         if now < end:
             time.sleep((end - now).total_seconds())
-        send(summary(day.isoformat()))
+        send(summary(day.isoformat()), room="📊 毎日のまとめ")
 
 
 if __name__ == "__main__":
