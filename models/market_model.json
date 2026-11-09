@@ -1,0 +1,9 @@
+{
+ "a": 1.5,
+ "b": 0.5,
+ "c": 0.5,
+ "ev_threshold": 1.0,
+ "max_odds": 100,
+ "trained_until": "2026-11-08",
+ "n_trees": 568
+}

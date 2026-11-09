@@ -1,0 +1,96 @@
+# 毎日の自動予想（エア投票）と Discord 通知。
+# GitHubの1回の実行は6時間までなので、1日を3回に分けて動かす。
+# 時刻はUTCで書く（日本時間 = UTC + 9時間）。
+name: 毎日の自動予想
+
+on:
+  schedule:
+    - cron: "50 22 * * *"   # 朝の部   7:50 JST 〜 12:30 締切まで
+    - cron: "20 3 * * *"    # 昼の部  12:20 JST 〜 17:30 締切まで
+    - cron: "20 8 * * *"    # 夜の部  17:20 JST 〜 最終レース＋1日のまとめ
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "test=テスト通知だけ / once=今の時点で締切前のレースを1回だけ予想 / live=通常どおり"
+        default: test
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      TZ: Asia/Tokyo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: テスト通知
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test'
+        run: python src/notify.py "✅ 予想AIの通知テストです。これが届いていれば設定OK！"
+
+      - name: 過去データを復元
+        if: github.event_name == 'schedule' || inputs.mode != 'test'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/raw
+            data/csv
+            data/cache
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - name: 初回だけ過去データを展開
+        if: github.event_name == 'schedule' || inputs.mode != 'test'
+        run: |
+          if [ ! -d data/raw/K ]; then unzip -q seed/raw.zip -d data/; fi
+          if [ ! -f data/csv/programs.csv ]; then python src/parse.py; fi
+          ls data/raw/K | tail -1
+
+      - name: 予想する
+        if: github.event_name == 'schedule' || inputs.mode != 'test'
+        run: |
+          H=$(date +%H)
+          if [ "${{ inputs.mode }}" = "once" ]; then
+            python src/live.py --once
+          elif [ "$H" -lt 12 ]; then
+            python src/live.py --until 12:30
+          elif [ "$H" -lt 17 ]; then
+            python src/live.py --until 17:30
+          else
+            python src/live.py
+          fi
+
+      - name: 過去データを保存
+        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/raw
+            data/csv
+            data/cache
+          key: data-${{ github.run_id }}
+
+      - name: 予想とエア投票の記録をリポジトリに保存
+        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')
+        run: |
+          git config user.name "yoso-ai bot"
+          git config user.email "yoso-ai-bot@users.noreply.github.com"
+          git add -f data/predictions data/paper || true
+          if ! git diff --cached --quiet; then
+            git commit -m "予想記録 $(date +%Y-%m-%d\ %H:%M)"
+            for i in 1 2 3; do git pull --rebase && git push && break; sleep 5; done
+          fi

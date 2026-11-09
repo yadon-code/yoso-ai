@@ -1,0 +1,14 @@
+# 大きいデータはリポジトリに入れない（GitHub側ではキャッシュに置く）
+data/raw/
+data/raw.zip
+data/csv/
+data/odds/
+data/oriten/
+data/beforeinfo/
+data/pred/
+data/cache/
+*.log
+__pycache__/
+.env
+models/.retrained_f_fix
+run_jobs.sh
