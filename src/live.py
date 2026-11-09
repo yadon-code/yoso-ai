@@ -164,6 +164,9 @@ def main():
     sched["deadline_dt"] = sched["deadline"].map(
         lambda t: dt.datetime.combine(day, dt.time(*map(int, t.split(":"))), JST) if isinstance(t, str) else None)
     sched = sched.dropna(subset=["deadline_dt"]).sort_values("deadline_dt")
+    sp = ROOT / "data" / "predictions" / f"schedule_{day:%Y%m%d}.csv"
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sched[KEY + ["venue", "deadline"]].to_csv(sp, index=False)  # ウェブアプリ用の出走表（締切時刻）
     done_path = ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv"
     done = set()
     if done_path.exists():

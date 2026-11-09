@@ -63,6 +63,10 @@ jobs:
       - name: 予想する
         if: github.event_name == 'schedule' || inputs.mode != 'test'
         run: |
+          git config user.name "yoso-ai bot"
+          git config user.email "yoso-ai-bot@users.noreply.github.com"
+          # 10分ごとにウェブアプリ用のデータを保存する（裏で動かす）
+          ( while sleep 600; do bash scripts/push_data.sh; done ) &
           H=$(date +%H)
           if [ "${{ inputs.mode }}" = "once" ]; then
             python src/live.py --once
@@ -89,8 +93,4 @@ jobs:
         run: |
           git config user.name "yoso-ai bot"
           git config user.email "yoso-ai-bot@users.noreply.github.com"
-          git add -f data/predictions data/paper data/discord_threads.json 2>/dev/null; git add -f data/predictions data/paper || true
-          if ! git diff --cached --quiet; then
-            git commit -m "予想記録 $(date +%Y-%m-%d\ %H:%M)"
-            for i in 1 2 3; do git pull --rebase && git push && break; sleep 5; done
-          fi
+          bash scripts/push_data.sh
