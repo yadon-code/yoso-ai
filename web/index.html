@@ -3,60 +3,100 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#08224d">
 <title>競艇予想AI</title>
 <meta name="description" content="競艇の3連単をAIで予想。レース場ごとの予想・買い目・結果と回収率。">
 <style>
-:root{--bg:#f6f5f2;--panel:#fff;--fg:#1d1d1b;--muted:#6b6a66;--line:#e4e2dc;--accent:#2f5bd3;--ok:#1f8a4c;--ng:#b23b3b;--chip:#ecebe6}
-@media (prefers-color-scheme:dark){:root{--bg:#161615;--panel:#211f1e;--fg:#ecebe6;--muted:#a3a19b;--line:#36332f;--accent:#7f9ef0;--ok:#4cc27e;--ng:#e07272;--chip:#2c2a27}}
+:root{color-scheme:dark;--bg:#050d1a;--panel:#0c1c33;--panel2:#11284a;--fg:#eaf2ff;--muted:#8ea5c5;--line:#1d385e;--accent:#22d3ee;--gold:#ffc83d;--ok:#3ddc84;--ng:#ff7b7b;--chip:#0f2340;
+  --num:"DIN Alternate","Avenir Next Condensed","Roboto Condensed","Hiragino Sans",system-ui,sans-serif}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;line-height:1.5}
-.wrap{max-width:860px;margin:0 auto;padding:16px}
-h1{font-size:22px;margin:4px 0 2px}
-.sub{color:var(--muted);font-size:13px;margin:0}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:16px 0}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
-.stat .k{font-size:12px;color:var(--muted)}.stat .v{font-size:22px;font-variant-numeric:tabular-nums;font-weight:600}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}
-select{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
-.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin:8px 0 12px}
-.chip{flex:none;border:1px solid var(--line);background:var(--chip);color:var(--fg);border-radius:999px;padding:5px 12px;font:inherit;font-size:14px;cursor:pointer}
-.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+body{margin:0;background:var(--bg) radial-gradient(1200px 500px at 50% -120px,#0d2f63 0%,transparent 70%) no-repeat;color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;line-height:1.5;-webkit-text-size-adjust:100%}
+.wrap{max-width:980px;margin:0 auto;padding:0 16px 24px}
+/* ヘッダー：水面と6色の枠 */
+.hero{position:relative;margin:0 -16px;padding:22px 16px 34px;background:linear-gradient(120deg,#08224d 0%,#0a3f86 55%,#0b86b3 100%);overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(115deg,transparent 0 46px,#ffffff0d 46px 48px);pointer-events:none}
+.hero svg{position:absolute;left:0;right:0;bottom:-1px;width:100%;height:26px;display:block}
+.eyebrow{position:relative;font-family:var(--num);font-size:11px;letter-spacing:.28em;color:#bfe9ff;margin:0 0 2px}
+h1{position:relative;font-size:30px;line-height:1.15;margin:0;font-weight:900;font-style:italic;letter-spacing:.02em;text-shadow:0 2px 0 #0006}
+h1 em{font-style:inherit;color:var(--gold)}
+.lanes{position:relative;display:flex;gap:4px;margin:10px 0 8px;width:156px}
+.lanes i{flex:1;height:6px;border-radius:2px;transform:skewX(-20deg)}
+.sub{position:relative;color:#cfe3ff;font-size:13px;margin:0}
+.c1{background:#fff}.c2{background:#15181d;box-shadow:inset 0 0 0 1px #8b97ab}.c3{background:#e5352b}.c4{background:#2a6df0}.c5{background:#ffd62e}.c6{background:#22a857}
+/* 成績 */
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}
+@media (min-width:720px){.stats{grid-template-columns:repeat(4,1fr)}}
+.stat{position:relative;background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:12px;padding:12px 12px 10px;overflow:hidden}
+.stat::before{content:"";position:absolute;left:0;top:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),#2a6df0)}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font-family:var(--num);font-size:30px;line-height:1.15;font-variant-numeric:tabular-nums;font-weight:700}
+.stat.roi .v{color:var(--gold)}
+/* 操作 */
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 8px}
+select{font:inherit;font-weight:600;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 .toggle{font-size:14px;color:var(--muted);display:flex;gap:6px;align-items:center}
-.cards{display:flex;flex-direction:column;gap:10px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
-.card.buy{border-color:var(--accent)}
-.head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline}
-.title{font-weight:600;font-size:16px}.meta{color:var(--muted);font-size:13px}
-.boats{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin:10px 0 6px}
-.boat{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:12px;font-variant-numeric:tabular-nums}
-.num{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;font-weight:700;font-size:13px;border:1px solid #0003}
-.b1{background:#fff;color:#000}.b2{background:#222;color:#fff}.b3{background:#d33;color:#fff}.b4{background:#2a62d6;color:#fff}.b5{background:#f2cf2a;color:#000}.b6{background:#1f9a4e;color:#fff}
-.bar{width:100%;height:36px;background:var(--chip);border-radius:4px;display:flex;align-items:flex-end;overflow:hidden}
-.bar i{display:block;width:100%;background:var(--accent);opacity:.75}
-.line{font-size:13px;margin-top:6px}.line b{font-weight:600}
+.toggle input{accent-color:var(--accent);width:16px;height:16px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 6px;margin:6px 0 8px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line);background:var(--chip);color:var(--fg);border-radius:6px;padding:6px 13px;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#03202b}
+.legend{font-size:12px;color:var(--muted);margin:2px 0 12px}.legend .tag{margin:0 4px 0 10px}.legend .tag:first-child{margin-left:0}
+/* レースのカード */
+.cards{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width:820px){.cards{grid-template-columns:1fr 1fr}}
+.card{position:relative;background:linear-gradient(180deg,var(--panel2) 0,var(--panel) 70px);border:1px solid var(--line);border-radius:14px;padding:12px 14px 13px;min-width:0}
+.card.buy{border-color:#1aa9c4;box-shadow:0 0 0 1px #22d3ee33,0 8px 24px -12px #22d3ee66}
+.head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center}
+.title{display:flex;align-items:center;gap:8px;font-weight:800;font-size:17px}
+.rno{font-family:var(--num);font-style:italic;font-weight:700;font-size:15px;background:var(--fg);color:#07162b;border-radius:5px;padding:0 8px 0 6px;transform:skewX(-8deg)}
+.buytag{font-size:11px;font-weight:800;color:#03202b;background:var(--accent);border-radius:4px;padding:1px 6px;letter-spacing:.05em}
+.meta{color:var(--muted);font-size:12px}
+.boats{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin:12px 0 8px}
+.boat{display:flex;flex-direction:column;align-items:center;gap:4px;font-family:var(--num);font-size:13px;font-variant-numeric:tabular-nums;color:var(--muted)}
+.boat.top{color:var(--gold);font-weight:700}
+.bar{width:100%;height:40px;background:#07142a;border-radius:4px;display:flex;align-items:flex-end;overflow:hidden;box-shadow:inset 0 0 0 1px #ffffff0a}
+.bar i{display:block;width:100%;border-radius:3px 3px 0 0}
+.num{font-family:var(--num);width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;font-weight:700;font-size:14px;font-style:normal;line-height:1}
+.b1{background:#fff;color:#000}.b2{background:#15181d;color:#fff;box-shadow:inset 0 0 0 1px #8b97ab}.b3{background:#e5352b;color:#fff}.b4{background:#2a6df0;color:#fff}.b5{background:#ffd62e;color:#000}.b6{background:#22a857;color:#fff}
+.combo{display:inline-flex;gap:2px;vertical-align:middle}
+.combo .num{width:19px;height:19px;font-size:12px;border-radius:4px}
+.line{font-size:13px;margin-top:8px}.line b{font-weight:700}
+.lbl{display:block;font-size:11px;color:var(--muted);letter-spacing:.06em;margin-bottom:4px}
+.tops{display:flex;flex-wrap:wrap;gap:6px 14px}
+.tops span.p{font-family:var(--num);color:var(--muted);margin-left:5px;font-size:13px}
 .picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
-.pick{font-size:13px;border:1px solid var(--line);border-radius:8px;padding:3px 8px;font-variant-numeric:tabular-nums}
-.pick.hit{border-color:var(--ok);color:var(--ok);font-weight:600}
-.tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:0 5px;margin-right:6px;color:#fff;vertical-align:1px}
-.tag.t1{background:#2f6fd0}.tag.t2{background:#b06a00}.tag.t3{background:#b23b6f}
-.legend{font-size:12px;color:var(--muted);margin:2px 0 10px}.legend .tag{margin:0 4px 0 10px}.legend .tag:first-child{margin-left:0}
-.res{font-size:13px;margin-top:8px}.ok{color:var(--ok);font-weight:600}.ng{color:var(--muted)}
-.empty{color:var(--muted);padding:24px 0;text-align:center}
-.note{color:var(--muted);font-size:12px;margin-top:20px}
-.lock{max-width:360px;margin:18vh auto 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
-.lock h2{font-size:18px;margin:0 0 4px}
-.lock form{display:flex;gap:8px;margin-top:14px}
-.lock input{flex:1;min-width:0;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
-.lock button,.linkbtn{font:inherit;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:8px 14px;cursor:pointer}
-.linkbtn{background:none;border:none;color:var(--muted);padding:0;font-size:12px;text-decoration:underline}
+.pick{display:inline-flex;align-items:center;gap:7px;font-size:13px;background:#07142a;border:1px solid var(--line);border-radius:8px;padding:5px 9px 5px 6px;font-variant-numeric:tabular-nums}
+.pick .o{font-family:var(--num);font-weight:700;font-size:15px}
+.pick .e{color:var(--muted);font-size:12px}
+.pick.hit{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),0 0 14px -2px #ffc83d88}
+.tag{display:inline-block;font-size:11px;font-weight:800;border-radius:4px;padding:1px 6px;color:#fff;letter-spacing:.04em}
+.tag.t1{background:#2a6df0}.tag.t2{background:#c97a00}.tag.t3{background:#c2337a}
+.res{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px;margin-top:11px;padding-top:9px;border-top:1px dashed var(--line)}
+.res .pay{font-family:var(--num);font-size:15px}
+.ok{color:#201400;background:var(--gold);font-weight:800;border-radius:5px;padding:1px 8px}
+.ng{color:var(--muted)}
+.empty{color:var(--muted);padding:28px 0;text-align:center;grid-column:1/-1}
+.note{color:var(--muted);font-size:12px;margin-top:22px}
+/* 合言葉の画面 */
+.lock{max-width:380px;margin:16vh auto 0;background:linear-gradient(160deg,#0a3f86,#0c1c33 60%);border:1px solid var(--line);border-radius:16px;padding:22px 20px;box-shadow:0 20px 50px -20px #000}
+.lock h2{font-size:24px;margin:0;font-weight:900;font-style:italic}
+.lock h2 em{font-style:inherit;color:var(--gold)}
+.lock .sub{margin-top:4px}
+.lock form{display:flex;gap:8px;margin-top:16px}
+.lock input{flex:1;min-width:0;font:inherit;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:#050d1a;color:var(--fg)}
+.lock button{font:inherit;font-weight:800;border-radius:8px;border:0;background:var(--accent);color:#03202b;padding:9px 16px;cursor:pointer}
+.linkbtn{font:inherit;background:none;border:none;color:var(--muted);padding:0;font-size:12px;text-decoration:underline;cursor:pointer}
 .err{color:var(--ng);font-size:13px;min-height:1.5em;margin:8px 0 0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
 <div class="wrap" id="lock" hidden>
   <div class="lock">
-    <h2>競艇予想AI</h2>
+    <p class="eyebrow">BOAT RACE AI PREDICTION</p>
+    <h2>競艇予想<em>AI</em></h2>
+    <div class="lanes" aria-hidden="true"><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i><i class="c5"></i><i class="c6"></i></div>
     <p class="sub">このページを見るには合言葉が必要です。</p>
     <form id="lockForm">
       <input type="password" id="pw" placeholder="合言葉" aria-label="合言葉" autocomplete="current-password" required>
@@ -66,8 +106,13 @@ select{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
   </div>
 </div>
 <div class="wrap" id="app">
-  <h1>競艇予想AI</h1>
-  <p class="sub" id="updated">読み込み中…</p>
+  <header class="hero">
+    <p class="eyebrow">BOAT RACE AI PREDICTION</p>
+    <h1>競艇予想<em>AI</em></h1>
+    <div class="lanes" aria-hidden="true"><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i><i class="c5"></i><i class="c6"></i></div>
+    <p class="sub" id="updated">読み込み中…</p>
+    <svg viewBox="0 0 1200 26" preserveAspectRatio="none" aria-hidden="true"><path d="M0 14 C150 0 300 26 450 14 S750 0 900 14 S1100 24 1200 10 V26 H0Z" fill="#050d1a"/></svg>
+  </header>
 
   <div class="stats" id="stats"></div>
 
@@ -127,6 +172,13 @@ function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.
 // 買い目の種類: オッズ（配当の高さ）で分けるラベル。予想の方法は同じ。
 const kind = (odds) => odds < 20 ? ['本命', 't1'] : odds < 50 ? ['中穴', 't2'] : ['穴', 't3'];
 
+// 「1-2-3」を枠の色つきの数字で表示する
+function comboEl(combo) {
+  const c = el('span', 'combo'); c.setAttribute('aria-label', combo);
+  for (const n of String(combo).split('-')) c.append(el('span', 'num b' + n, n));
+  return c;
+}
+
 function renderStats() {
   const t = S.days.total, d = S.days.days.find((x) => x.date === S.day) || { stake: 0, return: 0, hits: 0, settled: 0 };
   const items = [
@@ -137,7 +189,7 @@ function renderStats() {
   ];
   const box = $('stats'); box.replaceChildren();
   for (const [k, v, s] of items) {
-    const c = el('div', 'stat'); c.append(el('div', 'k', k), el('div', 'v', v));
+    const c = el('div', 'stat' + (k.includes('回収率') ? ' roi' : '')); c.append(el('div', 'k', k), el('div', 'v', v));
     if (s) c.append(el('div', 'k', s));
     box.append(c);
   }
@@ -165,21 +217,26 @@ function renderCards() {
     const buy = r.exhibit && r.picks && r.picks.length;
     const c = el('div', 'card' + (buy ? ' buy' : ''));
     const h = el('div', 'head');
-    h.append(el('span', 'title', `${r.venue} ${r.race_no}R`),
+    const title = el('span', 'title'); title.append(document.createTextNode(r.venue), el('span', 'rno', `${r.race_no}R`));
+    if (buy) title.append(el('span', 'buytag', '買い目あり'));
+    h.append(title,
       el('span', 'meta', [r.deadline ? `締切 ${r.deadline}` : '', r.predicted_at ? `予想 ${r.predicted_at}` : '予想前', r.exhibit === false ? '展示前の予想' : ''].filter(Boolean).join('・')));
     c.append(h);
     if (r.p_win) {
       const g = el('div', 'boats');
       const mx = Math.max(...r.p_win);
       r.p_win.forEach((p, i) => {
-        const b = el('div', 'boat');
-        const bar = el('div', 'bar'); const f = el('i'); f.style.height = Math.round(p / mx * 100) + '%'; bar.append(f);
+        const b = el('div', 'boat' + (p === mx ? ' top' : ''));
+        const bar = el('div', 'bar'); const f = el('i', 'c' + (i + 1)); f.style.height = Math.max(4, Math.round(p / mx * 100)) + '%'; bar.append(f);
         bar.setAttribute('role', 'img'); bar.setAttribute('aria-label', `${i + 1}号艇 1着確率 ${Math.round(p * 100)}%`);
         b.append(bar, el('span', 'num b' + (i + 1), i + 1), el('span', '', Math.round(p * 100) + '%'));
         g.append(b);
       });
       c.append(g);
-      const top = el('div', 'line'); top.append(el('b', '', '当たりやすい順 '), document.createTextNode(r.top5.slice(0, 3).map((t) => `${t.combo}（${(t.prob * 100).toFixed(1)}%）`).join('　')));
+      const top = el('div', 'line'); top.append(el('span', 'lbl', '当たりやすい順'));
+      const tops = el('div', 'tops');
+      for (const t of r.top5.slice(0, 3)) { const w = el('span'); w.append(comboEl(t.combo), el('span', 'p', (t.prob * 100).toFixed(1) + '%')); tops.append(w); }
+      top.append(tops);
       c.append(top);
     }
     if (buy) {
@@ -190,14 +247,14 @@ function renderCards() {
       for (const k of r.picks) {
         const [name, cls] = kind(k.odds);
         const chip = el('span', 'pick' + (k.hit ? ' hit' : ''));
-        chip.append(el('span', 'tag ' + cls, name), document.createTextNode(`${k.combo}  ${k.odds}倍  期待値${k.ev.toFixed(2)}${k.refund ? '  返還' : ''}`));
+        chip.append(el('span', 'tag ' + cls, name), comboEl(k.combo), el('span', 'o', `${k.odds}倍`), el('span', 'e', `期待値${k.ev.toFixed(2)}${k.refund ? '・返還' : ''}`));
         p.append(chip);
       }
       c.append(p);
     }
     if (r.result) {
       const res = el('div', 'res');
-      res.append(document.createTextNode(`結果 ${r.result}（${yen(r.payout)}）　`));
+      res.append(el('span', 'ng', '結果'), /^\d-\d-\d$/.test(r.result) ? comboEl(r.result) : el('span', '', r.result), el('span', 'pay', yen(r.payout)));
       if (buy) {
         const hit = r.picks.find((k) => k.hit);
         const back = r.picks.filter((k) => k.refund).length;
