@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 355
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}   # ウェブアプリの合言葉（未設定ならカギなし）
       TZ: Asia/Tokyo
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +78,10 @@ jobs:
           else
             python src/live.py
           fi
+
+      - name: 止まったら知らせる
+        if: ${{ !success() && (github.event_name == 'schedule' || inputs.mode != 'test') }}
+        run: python src/notify.py "⚠️ 自動予想が途中で止まりました。次の回（朝・昼・夜）でまた動きます。くわしくは ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: 過去データを保存
         if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')

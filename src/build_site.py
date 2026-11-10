@@ -20,6 +20,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parse import VENUES  # noqa: E402
+import sitecrypt  # noqa: E402
 from settle_live import CACHE, result, settle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +40,18 @@ def save_cache(known):
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([{"date": k[0], "venue_code": k[1], "race_no": k[2], "trifecta": v[0], "payout": v[1]}
                   for k, v in sorted(known.items())]).to_csv(CACHE, index=False)
+
+
+def write_site(name, obj, pw):
+    """ウェブアプリ用のファイルを書く。合言葉があれば暗号化した .enc だけを残す。"""
+    text = json.dumps(obj, ensure_ascii=False)
+    plain, enc = OUT / name, OUT / (name + ".enc")
+    if pw:
+        enc.write_text(sitecrypt.encrypt(text, pw), encoding="ascii")
+        plain.unlink(missing_ok=True)
+    else:
+        plain.write_text(text, encoding="utf-8")
+        enc.unlink(missing_ok=True)
 
 
 def parse_picks(s):
@@ -85,45 +98,6 @@ def build_day(day: dt.date, known, now):
             if r:
                 known[k] = r
     out = []
-    for m in re.finditer(r"(\d-\d-\d)\(([\d.]+)倍,期待値([\d.]+)\)", s if isinstance(s, str) else ""):
-        out.append({"combo": m.group(1), "odds": float(m.group(2)), "ev": float(m.group(3))})
-    return out
-
-
-def build_day(day: dt.date, known, now):
-    ymd = f"{day:%Y%m%d}"
-    iso = day.isoformat()
-    races = {}
-    sp = PRED / f"schedule_{ymd}.csv"
-    if sp.exists():
-        for r in pd.read_csv(sp, dtype={"venue_code": str}).itertuples():
-            races[(r.venue_code, int(r.race_no))] = {"deadline": r.deadline}
-    lp = PRED / f"live_{ymd}.csv"
-    preds = pd.read_csv(lp, dtype={"venue_code": str}) if lp.exists() else pd.DataFrame()
-    for r in preds.itertuples():
-        d = races.setdefault((r.venue_code, int(r.race_no)), {})
-        d.update({"predicted_at": r.predicted_at[-5:], "exhibit": bool(r.exhibit),
-                  "p_win": [float(x) for x in str(r.p_win).split()],
-                  "top5": [{"combo": t.split(":")[0], "prob": float(t.split(":")[1])} for t in str(r.top5).split()],
-                  "picks": parse_picks(r.picks)})
-    if not races:
-        return None
-    # 締切を5分以上過ぎたレースの結果を調べる
-    for (v, rn), d in races.items():
-        k = (iso, v, rn)
-        if k in known:
-            continue
-        dl = d.get("deadline") if isinstance(d.get("deadline"), str) else d.get("predicted_at")
-        if isinstance(dl, str):
-            t = dt.datetime.combine(day, dt.time(*map(int, dl.split(":"))), JST)
-            if now < t + dt.timedelta(minutes=8):
-                continue
-        elif day >= now.date():
-            continue
-        r = result(iso, v, rn)
-        if r:
-            known[k] = r
-    out = []
     for (v, rn), d in sorted(races.items(), key=lambda x: (x[0][0], x[0][1])):
         res = known.get((iso, v, rn))
         bets = [p for p in d.get("picks", [])] if d.get("exhibit") else []
@@ -139,18 +113,22 @@ def main():
     days = [dt.date.fromisoformat(sys.argv[1])] if len(sys.argv) > 1 else [now.date()]
     known = load_cache()
     OUT.mkdir(parents=True, exist_ok=True)
+    pw = sitecrypt.password()
+    if pw:  # 合言葉を設定する前に作った、カギなしの過去の日のファイルにもカギをかける
+        for f in OUT.glob("2*.json"):
+            write_site(f.name, json.loads(f.read_text(encoding="utf-8")), pw)
     for day in days:
         data = build_day(day, known, now)
         if data:
-            (OUT / f"{day:%Y%m%d}.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            write_site(f"{day:%Y%m%d}.json", data, pw)
             print(f"{day}: {len(data['races'])} レース")
     save_cache(known)
     # 日付一覧とエア投票の成績
     b = settle()
     rows = []
-    files = sorted(OUT.glob("2*.json"))
-    for f in files:
-        iso = f"{f.stem[:4]}-{f.stem[4:6]}-{f.stem[6:]}"
+    stems = sorted({f.name[:8] for f in list(OUT.glob("2*.json")) + list(OUT.glob("2*.json.enc"))})
+    for stem in stems:
+        iso = f"{stem[:4]}-{stem[4:6]}-{stem[6:]}"
         d = b[b.date == iso] if len(b) else b
         s = d[d.settled] if len(d) else d
         rows.append({"date": iso, "bets": int(len(d)), "settled": int(len(s)),
@@ -158,8 +136,7 @@ def main():
                      "return": int(s["return"].sum()) if len(s) else 0,
                      "hits": int((s["return"] > 0).sum()) if len(s) else 0})
     tot = {k: sum(r[k] for r in rows) for k in ["bets", "settled", "stake", "return", "hits"]}
-    (OUT / "days.json").write_text(json.dumps({"updated": now.strftime("%Y-%m-%d %H:%M"), "total": tot,
-                                               "days": rows[::-1]}, ensure_ascii=False), encoding="utf-8")
+    write_site("days.json", {"updated": now.strftime("%Y-%m-%d %H:%M"), "total": tot, "days": rows[::-1]}, pw)
 
 
 if __name__ == "__main__":

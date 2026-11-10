@@ -58,3 +58,12 @@ python3 src/backtest.py                          # 回収率を検証
 - 予想の記録: `data/predictions/live_YYYYMMDD.csv`、エア投票: `data/paper/bets.csv`（毎回自動で保存）
 - 手動テスト: Actions → 「毎日の自動予想」→ Run workflow（mode: test でテスト通知だけ）
 - 過去データの初期値: `seed/raw.zip`（公式の番組表・競走成績）
+
+## ウェブアプリのロック（合言葉）
+リポジトリの Secret `SITE_PASSWORD` に合言葉を入れると、ウェブアプリ用のデータ（`data/site/*.json.enc`）が暗号化され、
+ページを開くときに合言葉を聞かれるようになります（一度入れればその端末は覚えます）。Secret が無いあいだはカギなしです。
+※ 予想の元の記録（`data/predictions`、`data/paper`）は公開リポジトリの中にそのまま残ります。
+
+## あとで検証に使う記録
+- `data/odds_pre/pre_YYYYMMDD.csv`：予想した時点（締切の約5分前）の3連単オッズ120通り。1行=1レース、`odds` は `backtest.COMBOS` の順に空白区切り（空は発売なし）
+- 予想・エア投票の `model` 列：`v2`=第2段階（オッズのズレ補正）、`v1`=第1段階だけで出した買い目

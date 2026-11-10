@@ -40,10 +40,29 @@ select{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
 .res{font-size:13px;margin-top:8px}.ok{color:var(--ok);font-weight:600}.ng{color:var(--muted)}
 .empty{color:var(--muted);padding:24px 0;text-align:center}
 .note{color:var(--muted);font-size:12px;margin-top:20px}
+.lock{max-width:360px;margin:18vh auto 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+.lock h2{font-size:18px;margin:0 0 4px}
+.lock form{display:flex;gap:8px;margin-top:14px}
+.lock input{flex:1;min-width:0;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.lock button,.linkbtn{font:inherit;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:8px 14px;cursor:pointer}
+.linkbtn{background:none;border:none;color:var(--muted);padding:0;font-size:12px;text-decoration:underline}
+.err{color:var(--ng);font-size:13px;min-height:1.5em;margin:8px 0 0}
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap" id="lock" hidden>
+  <div class="lock">
+    <h2>競艇予想AI</h2>
+    <p class="sub">このページを見るには合言葉が必要です。</p>
+    <form id="lockForm">
+      <input type="password" id="pw" placeholder="合言葉" aria-label="合言葉" autocomplete="current-password" required>
+      <button type="submit">ひらく</button>
+    </form>
+    <p class="err" id="lockErr" role="alert"></p>
+  </div>
+</div>
+<div class="wrap" id="app">
   <h1>競艇予想AI</h1>
   <p class="sub" id="updated">読み込み中…</p>
 
@@ -56,7 +75,7 @@ select{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
   <div class="chips" id="venues"></div>
   <div class="cards" id="cards"></div>
 
-  <p class="note">予想は締切の少し前、展示を見たあとに出します。買い目は「AIの確率 × オッズ」が1を超えた組（期待値1超え、100倍以下）で、1点100円の想定です。お金は使わない「エア投票」の記録で、まだ勝てると証明されたものではありません。</p>
+  <p class="note">予想は締切の少し前、展示を見たあとに出します。買い目は「AIの確率 × オッズ」が1を超えた組（期待値1超え、100倍以下）で、1点100円の想定です。お金は使わない「エア投票」の記録で、まだ勝てると証明されたものではありません。 <button class="linkbtn" id="relock" hidden>カギをかけ直す</button></p>
 </div>
 <script>
 const BASE = 'https://raw.githubusercontent.com/yadon-code/yoso-ai/main/data/site/';
@@ -65,10 +84,38 @@ const $ = (id) => document.getElementById(id);
 const yen = (n) => n.toLocaleString('ja-JP') + '円';
 const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
 
+// 合言葉のロック: データが暗号化されていれば（.enc）、合言葉から鍵を作って元に戻す。
+// 合言葉はこの端末のブラウザにだけ覚えておく（次からは入力不要）。
+const PW_KEY = 'yoso-ai-pw';
+class LockedError extends Error {}
+const savedPw = () => { try { return localStorage.getItem(PW_KEY); } catch (e) { return S.pw || null; } };
+const savePw = (v) => { S.pw = v; try { v ? localStorage.setItem(PW_KEY, v) : localStorage.removeItem(PW_KEY); } catch (e) { /* 保存できなくても動く */ } };
+
+async function decrypt(b64, pw) {
+  const raw = Uint8Array.from(atob(b64.trim()), (c) => c.charCodeAt(0));
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: raw.slice(0, 16), iterations: 200000, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(16, 28) }, key, raw.slice(28));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
 async function get(name) {
-  const r = await fetch(BASE + name + '?t=' + Date.now());
+  const enc = await fetch(BASE + name + '.enc?t=' + Date.now());
+  if (enc.ok) {
+    const pw = S.pw || savedPw();
+    if (!pw) throw new LockedError('');
+    try { const d = await decrypt(await enc.text(), pw); S.locked = true; return d; }
+    catch (e) { savePw(null); throw new LockedError('合言葉がちがいます'); }
+  }
+  const r = await fetch(BASE + name + '?t=' + Date.now());  // カギなしのデータ
   if (!r.ok) throw new Error(r.status);
   return r.json();
+}
+
+function showLock(msg) {
+  $('app').hidden = true; $('lock').hidden = false;
+  $('lockErr').textContent = msg || ''; $('pw').value = ''; $('pw').focus();
 }
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -165,13 +212,19 @@ async function init(keep) {
     const day = cur && S.days.days.some((d) => d.date === cur) ? cur : S.days.days[0].date;
     sel.value = day;
     await loadDay(day);
-  } catch (e) { $('updated').textContent = 'データを読み込めませんでした'; }
+    $('lock').hidden = true; $('app').hidden = false; $('relock').hidden = !S.locked;
+  } catch (e) {
+    if (e instanceof LockedError) showLock(e.message);
+    else $('updated').textContent = 'データを読み込めませんでした';
+  }
 }
 
-$('day').onchange = (e) => loadDay(e.target.value);
+$('day').onchange = (e) => loadDay(e.target.value).catch((err) => { if (err instanceof LockedError) showLock(err.message); });
+$('lockForm').onsubmit = (e) => { e.preventDefault(); savePw($('pw').value); $('lockErr').textContent = '確認中…'; init(false); };
+$('relock').onclick = () => { savePw(null); showLock(''); };
 $('onlyBuy').onchange = (e) => { S.onlyBuy = e.target.checked; renderCards(); };
 init(false);
-setInterval(() => init(true), 120000);
+setInterval(() => { if ($('lock').hidden) init(true); }, 120000);
 </script>
 </body>
 </html>

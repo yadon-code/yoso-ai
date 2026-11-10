@@ -3,3 +3,4 @@ pandas
 numpy
 lightgbm
 scikit-learn
+cryptography
