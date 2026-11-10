@@ -127,23 +127,47 @@ def predict_race(booster, g, odds_rows):
     return p, p3, sorted(picks, key=lambda x: -x[2])
 
 
-def record(day, key, p, p3, picks, has_exhibit):
+def append_rows(path, rows):
+    """CSVに行を足す。前に作ったファイルと列が違うとき（列を増やしたあとなど）は、全体を書き直してそろえる。"""
+    new = pd.DataFrame(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        old = pd.read_csv(path, dtype=str, keep_default_na=False, nrows=0)
+        if list(old.columns) != list(new.columns):
+            old = pd.read_csv(path, dtype=str, keep_default_na=False)
+            pd.concat([old, new.astype(str)], ignore_index=True).fillna("").to_csv(path, index=False, encoding="utf-8")
+            return
+    new.to_csv(path, mode="a", header=not path.exists(), index=False, encoding="utf-8")
+
+
+def save_odds_snapshot(day, key, deadline_dt, odds_rows):
+    """予想した時点（締切の数分前）の3連単オッズ120通りを保存する。あとからは取り直せないデータ。
+    1行=1レース。odds は backtest.COMBOS の順に空白区切り。"""
+    if len(odds_rows) != 120:
+        return
+    now = dt.datetime.now(JST)
+    o = pd.DataFrame(odds_rows).set_index("combo").reindex(COMBOS)["odds"]
+    row = {"date": key[0], "venue_code": key[1], "race_no": key[2], "fetched_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+           "seconds_before": int((deadline_dt - now).total_seconds()),
+           "odds": " ".join("" if pd.isna(x) else f"{x:g}" for x in o)}
+    append_rows(ROOT / "data" / "odds_pre" / f"pre_{day:%Y%m%d}.csv", [row])
+
+
+def record(day, key, p, p3, picks, has_exhibit, model="v1"):
     now = dt.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
     top = np.argsort(-p3)[:5]
     row = {"date": key[0], "venue_code": key[1], "race_no": key[2], "predicted_at": now,
            "exhibit": has_exhibit, "p_win": " ".join(f"{x:.3f}" for x in p),
            "top5": " ".join(f"{COMBOS[i]}:{p3[i]:.3f}" for i in top),
-           "picks": " ".join(f"{c}({o:.1f}倍,期待値{e:.2f})" for c, o, e, _ in picks)}
-    path = ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([row]).to_csv(path, mode="a", header=not path.exists(), index=False, encoding="utf-8")
+           "picks": " ".join(f"{c}({o:.1f}倍,期待値{e:.2f})" for c, o, e, _ in picks),
+           "model": model}  # v2=第2段階（オッズのズレ補正）、v1=第1段階だけ（第2段階が使えなかったとき）
+    append_rows(ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv", [row])
     if picks and has_exhibit:  # エア投票は、展示を見たうえでの本番と同じ条件の予想だけ記録する
         led = ROOT / "data" / "paper" / "bets.csv"
-        led.parent.mkdir(parents=True, exist_ok=True)
         rows = [{"date": key[0], "venue_code": key[1], "race_no": key[2], "combo": c, "odds_at_pick": o,
-                 "ev": round(e, 3), "prob": round(b, 5), "picked_at": now, "stake": 100}
+                 "ev": round(e, 3), "prob": round(b, 5), "picked_at": now, "stake": 100, "model": model}
                 for c, o, e, b in picks]
-        pd.DataFrame(rows).to_csv(led, mode="a", header=not led.exists(), index=False)
+        append_rows(led, rows)
     return row
 
 
@@ -175,6 +199,7 @@ def main():
     print(f"対象 {len(sched)} レース（予想済み {len(done)}）", flush=True)
 
     until = dt.datetime.combine(day, dt.time(*map(int, a.until.split(":"))), JST) if a.until else None
+    v2_errors = 0
     for _, r in sched.iterrows():
         if (r.venue_code, r.race_no) in done:
             continue
@@ -196,14 +221,23 @@ def main():
         if has_ex:
             g = refresh(g, bi)
         odds_rows = fetch_odds(r.date, r.venue_code, int(r.race_no))
+        try:
+            save_odds_snapshot(day, key, r.deadline_dt, odds_rows)
+        except Exception as e:  # 保存の失敗で予想を止めない
+            print("オッズの保存に失敗:", e, flush=True)
         p, p3, picks = predict_race(booster, g, odds_rows)
+        model = "v1"
         if mmodel and has_ex and len(odds_rows) == 120 and all(x["odds"] for x in odds_rows):
             try:
                 ori = fetch_oriten(r.date, r.venue_code, r.race_no)
                 p, p3, picks = predict_race_v2(mmodel, key, p, bi, ori, odds_rows)
+                model = "v2"
             except Exception as e:  # 第2段階で失敗したら第1段階の結果を使う
                 print("第2段階でエラー:", e, flush=True)
-        row = record(day, key, p, p3, picks, has_ex)
+                v2_errors += 1
+                if v2_errors == 3 and not a.no_notify:  # 続けて起きているときだけ、1回知らせる
+                    send(f"⚠️ 第2段階の予想でエラーが続いています（{e}）。第1段階だけで予想を続けます。")
+        row = record(day, key, p, p3, picks, has_ex, model)
         print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
               f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}", flush=True)
         if picks and has_ex and not a.no_notify:
