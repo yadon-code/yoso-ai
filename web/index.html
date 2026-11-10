@@ -178,7 +178,7 @@ function renderCards() {
     if (buy) {
       const l = el('div', 'line'); l.append(el('b', '', `買い目 ${r.picks.length}点（各100円）`)); c.append(l);
       const p = el('div', 'picks');
-      for (const k of r.picks) p.append(el('span', 'pick' + (k.hit ? ' hit' : ''), `${k.combo}  ${k.odds}倍  期待値${k.ev.toFixed(2)}`));
+      for (const k of r.picks) p.append(el('span', 'pick' + (k.hit ? ' hit' : ''), `${k.combo}  ${k.odds}倍  期待値${k.ev.toFixed(2)}${k.refund ? '  返還' : ''}`));
       c.append(p);
     }
     if (r.result) {
@@ -186,7 +186,8 @@ function renderCards() {
       res.append(document.createTextNode(`結果 ${r.result}（${yen(r.payout)}）　`));
       if (buy) {
         const hit = r.picks.find((k) => k.hit);
-        res.append(hit ? el('span', 'ok', `的中 +${yen(r.payout)}`) : el('span', 'ng', 'はずれ'));
+        const back = r.picks.filter((k) => k.refund).length;
+        res.append(hit ? el('span', 'ok', `的中 +${yen(r.payout)}`) : el('span', 'ng', back === r.picks.length ? '返還' : 'はずれ'));
       }
       c.append(res);
     }

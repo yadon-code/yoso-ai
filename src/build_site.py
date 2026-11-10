@@ -21,25 +21,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parse import VENUES  # noqa: E402
 import sitecrypt  # noqa: E402
-from settle_live import CACHE, result, settle  # noqa: E402
+from settle_live import load_cache, result, save_cache, settle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PRED = ROOT / "data" / "predictions"
 OUT = ROOT / "data" / "site"
 JST = dt.timezone(dt.timedelta(hours=9))
-
-
-def load_cache():
-    if CACHE.exists():
-        c = pd.read_csv(CACHE, dtype={"venue_code": str})
-        return {(r.date, r.venue_code, int(r.race_no)): (r.trifecta, int(r.payout)) for r in c.itertuples()}
-    return {}
-
-
-def save_cache(known):
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([{"date": k[0], "venue_code": k[1], "race_no": k[2], "trifecta": v[0], "payout": v[1]}
-                  for k, v in sorted(known.items())]).to_csv(CACHE, index=False)
 
 
 def write_site(name, obj, pw):
@@ -101,8 +88,10 @@ def build_day(day: dt.date, known, now):
     for (v, rn), d in sorted(races.items(), key=lambda x: (x[0][0], x[0][1])):
         res = known.get((iso, v, rn))
         bets = [p for p in d.get("picks", [])] if d.get("exhibit") else []
+        back = (res[2] or "").split() if res else []
         for p in bets:
-            p["hit"] = bool(res and res[0] == p["combo"])
+            p["refund"] = any(x in back for x in p["combo"].split("-"))  # 返還（買ったお金が戻る）
+            p["hit"] = bool(res and res[0] == p["combo"]) and not p["refund"]
         out.append({"venue_code": v, "venue": VENUES.get(v, v), "race_no": rn, **d,
                     "result": res[0] if res else None, "payout": res[1] if res else None})
     return {"date": iso, "updated": now.strftime("%Y-%m-%d %H:%M"), "races": out}
@@ -134,7 +123,7 @@ def main():
         rows.append({"date": iso, "bets": int(len(d)), "settled": int(len(s)),
                      "stake": int(s.stake.sum()) if len(s) else 0,
                      "return": int(s["return"].sum()) if len(s) else 0,
-                     "hits": int((s["return"] > 0).sum()) if len(s) else 0})
+                     "hits": int(s["hit"].sum()) if len(s) else 0})
     tot = {k: sum(r[k] for r in rows) for k in ["bets", "settled", "stake", "return", "hits"]}
     write_site("days.json", {"updated": now.strftime("%Y-%m-%d %H:%M"), "total": tot, "days": rows[::-1]}, pw)
 

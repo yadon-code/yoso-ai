@@ -24,13 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backtest import COMBOS, TAKEOUT, harville  # noqa: E402
 from download_beforeinfo import fetch_race as fetch_bi  # noqa: E402
 from download_odds import fetch_race as fetch_odds  # noqa: E402
-from features import FEATURES, KEY, WIND_DIRS, build  # noqa: E402
+from features import FEATURES, KEY, build  # noqa: E402
 from notify import race_message, send  # noqa: E402
 import json  # noqa: E402
 import market_model as mm  # noqa: E402
 from download_bc import BASE as BC_BASE, get as bc_get, parse_oriten  # noqa: E402
 from settle_live import summary  # noqa: E402
-from predict import BI_WIND, ROOT, SETTINGS, todays_programs, update_history  # noqa: E402
+from predict import ROOT, SETTINGS, bi_wind_index, todays_programs, update_history  # noqa: E402
 
 JST = dt.timezone(dt.timedelta(hours=9))
 MINUTES_BEFORE = 5
@@ -63,8 +63,7 @@ def refresh(g, bi):
     w = bi.iloc[0]
     g["wind_speed"] = w["wind_speed_bi"]
     g["wave_cm"] = w["wave_bi"]
-    g["wind_dir_i"] = WIND_DIRS.index(BI_WIND[int(w["wind_dir_bi"])]) \
-        if pd.notna(w["wind_dir_bi"]) and int(w["wind_dir_bi"]) in BI_WIND else np.nan
+    g["wind_dir_i"] = bi_wind_index(g["venue_code"].iloc[0], w["wind_dir_bi"])
     g["exhibit_time_rank"] = g["exhibit_time"].rank(method="min")
     g["exhibit_time_diff"] = g["exhibit_time"] - g["exhibit_time"].mean()
     g["inner_exhibit_gap"] = g["exhibit_time"] - g["exhibit_time"].shift(1)
