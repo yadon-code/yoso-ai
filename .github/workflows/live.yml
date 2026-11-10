@@ -30,7 +30,10 @@ jobs:
       SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}   # ウェブアプリの合言葉（未設定ならカギなし）
       TZ: Asia/Tokyo
     steps:
+      # 前の回が終わるのを待ってから始まることがあるので、予約した時点ではなく「始まった時点」の最新を使う
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
@@ -98,4 +101,4 @@ jobs:
         run: |
           git config user.name "yoso-ai bot"
           git config user.email "yoso-ai-bot@users.noreply.github.com"
-          bash scripts/push_data.sh
+          bash scripts/push_data.sh final
