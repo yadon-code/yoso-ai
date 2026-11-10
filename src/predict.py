@@ -39,8 +39,19 @@ SETTINGS = {
     "ev_threshold": 1.2,       # 期待値がこれを超えた買い目だけ候補にする
     "max_odds": 100,           # これより高いオッズは買わない
 }
-# 直前情報ページの風向きアイコン番号 → 方角（暫定。データがたまったら見直す）
-BI_WIND = {i: WIND_DIRS[(i - 1) % 16] for i in range(1, 17)}
+# 直前情報ページの風向きアイコン（1〜16）は、方角ではなく「その場の水面図の中での向き」。
+# 学習データ（競走成績）は方角なので、レース場ごとにずらして読み替える。
+# 2026-08〜11月の約1,400レースで、直前情報のアイコンと競走成績の風向きを突き合わせて決めた（各場で一番多かったずれ）。
+BI_WIND_OFFSET = {"01": 11, "02": 9, "03": 5, "04": 4, "05": 0, "06": 12, "07": 14, "08": 0, "09": 1, "10": 11,
+                  "11": 12, "12": 12, "13": 15, "14": 10, "15": 2, "16": 12, "17": 14, "18": 2, "19": 14, "20": 15,
+                  "21": 8, "22": 7, "23": 13, "24": 6}
+
+
+def bi_wind_index(venue_code, icon):
+    """直前情報の風向きアイコン番号 → WIND_DIRS の番号（学習データと同じ方角）。無風(17)や不明は NaN。"""
+    if pd.isna(icon) or not 1 <= int(icon) <= 16 or str(venue_code).zfill(2) not in BI_WIND_OFFSET:
+        return np.nan
+    return (int(icon) - 1 + BI_WIND_OFFSET[str(venue_code).zfill(2)]) % 16
 
 
 def update_history(day: dt.date):
@@ -87,8 +98,7 @@ def main():
         up["exhibit_time"] = up["exhibit_time_bi"].where(up["exhibit_time_bi"] > 0)
         up["wind_speed"] = up["wind_speed_bi"]
         up["wave_cm"] = up["wave_bi"]
-        up["wind_dir_i"] = up["wind_dir_bi"].map(lambda x: WIND_DIRS.index(BI_WIND[int(x)])
-                                                 if pd.notna(x) and int(x) in BI_WIND else np.nan)
+        up["wind_dir_i"] = [bi_wind_index(v, x) for v, x in zip(up["venue_code"], up["wind_dir_bi"])]
     else:
         up["exhibit_time"] = np.nan
         up["wind_speed"] = up["wave_cm"] = up["wind_dir_i"] = np.nan
