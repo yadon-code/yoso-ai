@@ -95,6 +95,9 @@ def predict_race_v2(mmodel, key, p_ai, bi, ori, odds_rows):
     d = pd.DataFrame({"date": key[0], "venue_code": key[1], "race_no": key[2], "boat": range(1, 7),
                       "mw": mw, "p_win": p_ai})
     if len(bi):
+        bi = bi.copy()
+        # 学習データの風向きは「方角の番号（北=1…、無風=17）」なので、直前情報のアイコン番号を同じ表し方に直す
+        bi["wind_dir_bi"] = [17 if pd.notna(x) and int(x) == 17 else bi_wind_index(key[1], x) + 1 for x in bi["wind_dir_bi"]]
         d = d.merge(bi.drop(columns=["date", "venue_code", "race_no"], errors="ignore"), on="boat", how="left")
     if len(ori):
         d = d.merge(ori, on="boat", how="left")
