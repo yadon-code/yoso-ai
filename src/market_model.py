@@ -76,6 +76,7 @@ def market_win_probs(odds_vec):
 
 def load():
     odds = read_dir("odds", "odds_*.csv")
+    odds["odds"] = pd.to_numeric(odds["odds"], errors="coerce")  # 中身が空のファイルがあっても数値にそろえる
     ow = odds.pivot_table(index=KEY, columns="combo", values="odds").reindex(columns=COMBOS)
     ow = ow[ow.notna().all(axis=1)]
     ow = ow[ow.index.get_level_values("date") >= START]
@@ -93,7 +94,8 @@ def load():
         "boat": np.tile(np.arange(1, 7), len(ow)),
         "mw": mw.ravel(),
     })
-    pred = pd.read_csv(ROOT / "data" / "pred" / "oof_predictions.csv", dtype={"venue_code": str})
+    pred = pd.read_csv(ROOT / "data" / "pred" / os.environ.get("OOF_FILE", "oof_predictions.csv"),
+                       dtype={"venue_code": str})
     bi = read_dir("beforeinfo", "bi_*.csv")
     ori = read_dir("oriten", "oriten_*.csv")
     df = boats.merge(pred[KEY + ["boat", "p_win"]], on=KEY + ["boat"], how="left")

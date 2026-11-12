@@ -19,6 +19,7 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "csv" / "grades.csv"
 URL = "https://www.boatrace.jp/owpc/pc/race/index?hd={hd}"
+WORKERS = 8
 
 # 公式ページのクラス名 → グレード（a/b は表示用の色違いなので同じ扱い）
 GRADE_MAP = {"SG": "SG", "PG1": "G1", "G1": "G1", "G2": "G2", "G3": "G3", "ippan": "一般"}
@@ -60,7 +61,7 @@ def main():
     days = [d for d in days if d.isoformat() not in done]
     new = not OUT.exists()
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    with OUT.open("a", newline="", encoding="utf-8") as f, ThreadPoolExecutor(4) as ex:
+    with OUT.open("a", newline="", encoding="utf-8") as f, ThreadPoolExecutor(WORKERS) as ex:
         w = csv.writer(f)
         if new:
             w.writerow(["date", "jcd", "grade"])
