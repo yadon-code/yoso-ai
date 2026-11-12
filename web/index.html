@@ -49,6 +49,9 @@ select{font:inherit;font-weight:600;padding:7px 10px;border-radius:8px;border:1p
 .head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center}
 .title{display:flex;align-items:center;gap:8px;font-weight:800;font-size:17px}
 .rno{font-family:var(--num);font-style:italic;font-weight:700;font-size:15px;background:var(--fg);color:#07162b;border-radius:5px;padding:0 8px 0 6px;transform:skewX(-8deg)}
+.gtag{font-size:11px;font-weight:800;color:#2b1a00;background:#f2c14e;border-radius:4px;padding:1px 6px;letter-spacing:.05em}
+.rname{font-size:12px;font-weight:600;opacity:.75}
+.stat.gr{border-color:#f2c14e}
 .buytag{font-size:11px;font-weight:800;color:#03202b;background:var(--accent);border-radius:4px;padding:1px 6px;letter-spacing:.05em}
 .meta{color:var(--muted);font-size:12px}
 .boats{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin:12px 0 8px}
@@ -129,6 +132,8 @@ select{font:inherit;font-weight:600;padding:7px 10px;border-radius:8px;border:1p
 <script>
 const BASE = 'https://raw.githubusercontent.com/yadon-code/yoso-ai/main/data/site/';
 const S = { days: null, day: null, data: null, venue: 'all', onlyBuy: false };
+const BIG = ['SG', 'G1'];  // 🏆 グレードレースとして目立たせるグレード
+const isBig = (r) => BIG.includes(r.grade);
 const $ = (id) => document.getElementById(id);
 const yen = (n) => n.toLocaleString('ja-JP') + '円';
 const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
@@ -187,9 +192,14 @@ function renderStats() {
     ['通算の回収率', pct(t.return, t.stake), `${yen(t.stake)} → ${yen(t.return)}`],
     ['通算の的中', `${t.hits} / ${t.settled}点`, ''],
   ];
+  const g = S.days.grade_total;
+  if (g && g.bets) {
+    items.push(['🏆 SG・G1の回収率', pct(g.return, g.stake), `${yen(g.stake)} → ${yen(g.return)}`]);
+    items.push(['🏆 SG・G1の的中', `${g.hits} / ${g.settled}点`, '']);
+  }
   const box = $('stats'); box.replaceChildren();
   for (const [k, v, s] of items) {
-    const c = el('div', 'stat' + (k.includes('回収率') ? ' roi' : '')); c.append(el('div', 'k', k), el('div', 'v', v));
+    const c = el('div', 'stat' + (k.includes('回収率') ? ' roi' : '') + (k.includes('SG') ? ' gr' : '')); c.append(el('div', 'k', k), el('div', 'v', v));
     if (s) c.append(el('div', 'k', s));
     box.append(c);
   }
@@ -204,12 +214,13 @@ function renderVenues() {
     box.append(b);
   };
   add('all', 'すべて');
+  if (S.data.races.some(isBig)) add('big', '🏆 SG・G1');
   for (const [c, n] of names) add(c, n);
 }
 
 function renderCards() {
   const box = $('cards'); box.replaceChildren();
-  let rs = S.data.races.filter((r) => S.venue === 'all' || r.venue_code === S.venue);
+  let rs = S.data.races.filter((r) => S.venue === 'all' || (S.venue === 'big' ? isBig(r) : r.venue_code === S.venue));
   if (S.onlyBuy) rs = rs.filter((r) => r.picks && r.picks.length && r.exhibit);
   rs.sort((a, b) => (a.deadline || a.predicted_at || '').localeCompare(b.deadline || b.predicted_at || '') || a.venue_code.localeCompare(b.venue_code));
   if (!rs.length) { box.append(el('div', 'empty', 'このレース場の予想はまだありません')); return; }
@@ -218,6 +229,8 @@ function renderCards() {
     const c = el('div', 'card' + (buy ? ' buy' : ''));
     const h = el('div', 'head');
     const title = el('span', 'title'); title.append(document.createTextNode(r.venue), el('span', 'rno', `${r.race_no}R`));
+    if (isBig(r)) title.append(el('span', 'gtag', r.grade));
+    if (isBig(r) && r.race_name) title.append(el('span', 'rname', r.race_name));
     if (buy) title.append(el('span', 'buytag', '買い目あり'));
     h.append(title,
       el('span', 'meta', [r.deadline ? `締切 ${r.deadline}` : '', r.predicted_at ? `予想 ${r.predicted_at}` : '予想前', r.exhibit === false ? '展示前の予想' : ''].filter(Boolean).join('・')));
@@ -269,7 +282,7 @@ function renderCards() {
 async function loadDay(day) {
   S.day = day;
   S.data = await get(day.replaceAll('-', '') + '.json');
-  if (S.venue !== 'all' && !S.data.races.some((r) => r.venue_code === S.venue)) S.venue = 'all';
+  if (S.venue !== 'all' && !S.data.races.some((r) => (S.venue === 'big' ? isBig(r) : r.venue_code === S.venue))) S.venue = 'all';
   $('updated').textContent = `${day} のデータ（${S.data.updated} 更新）`;
   renderStats(); renderVenues(); renderCards();
 }

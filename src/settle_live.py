@@ -106,7 +106,36 @@ def summary(day: str):
     tot = b[b.settled]
     if len(tot) and tot.date.nunique() > 1:
         lines.append(f"累計: {len(tot)}点 回収率 {tot['return'].sum() / tot.stake.sum():.0%}")
+    lines += grade_lines(b, day)
     return "\n".join(lines)
+
+
+def with_grades(b):
+    """買い目に、そのレースのグレード（SG・G1など。記録を始める前の日は空）をつける。"""
+    from grade import schedule_grades
+    g = schedule_grades().drop_duplicates(["date", "venue_code", "race_no"])
+    g["race_no"] = g["race_no"].astype(int)
+    b = b.drop(columns=["grade"], errors="ignore").copy()
+    b["race_no"] = b["race_no"].astype(int)
+    return b.merge(g[["date", "venue_code", "race_no", "grade"]], on=["date", "venue_code", "race_no"], how="left")
+
+
+def grade_lines(b, day):
+    """🏆 SG・G1 のレースだけの成績（その日と累計）。"""
+    from grade import BIG
+    try:
+        bg = with_grades(b)
+    except Exception:
+        return []
+    bg = bg[bg["grade"].isin(BIG) & bg.settled]
+    if bg.empty:
+        return []
+    d = bg[bg.date == day]
+    out = []
+    if len(d):
+        out.append(f"🏆 SG・G1: {len(d)}点 回収率 {d['return'].sum() / d.stake.sum():.0%}　的中 {int(d['hit'].sum())}点")
+    out.append(f"🏆 SG・G1 累計: {len(bg)}点 回収率 {bg['return'].sum() / bg.stake.sum():.0%}　的中 {int(bg['hit'].sum())}点")
+    return out
 
 
 if __name__ == "__main__":
