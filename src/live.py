@@ -251,7 +251,11 @@ def main():
         now = dt.datetime.now(JST)
         if now < end:
             time.sleep((end - now).total_seconds())
-        send(summary(day.isoformat()), room="📊 毎日のまとめ")
+        flag = ROOT / "data" / "paper" / f"summary_sent_{day:%Y%m%d}"
+        if not flag.exists():  # 予備の回が後から動いても、まとめは1日1回だけ
+            send(summary(day.isoformat()), room="📊 毎日のまとめ")
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.touch()
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write   # 朝・昼の部が終わったら、すぐ次の部を始めるため
 
 jobs:
   live:
@@ -71,16 +72,24 @@ jobs:
           git config user.email "yoso-ai-bot@users.noreply.github.com"
           # 10分ごとにウェブアプリ用のデータを保存する（裏で動かす）
           ( while sleep 600; do bash scripts/push_data.sh; done ) &
-          H=$(date +%H)
+          # 予約時刻はGitHubの都合で30〜40分遅れることがあるので、時刻ではなく「始まった時点の時刻」で部を決め、
+          # 朝・昼の部は終わった瞬間に次の部を自分で呼ぶ（予約はその予備）
+          HM=$(date +%H%M)
           if [ "${{ inputs.mode }}" = "once" ]; then
             python src/live.py --once
-          elif [ "$H" -lt 12 ]; then
-            python src/live.py --until 12:30
-          elif [ "$H" -lt 17 ]; then
-            python src/live.py --until 17:30
+          elif [ "$HM" -lt 1130 ]; then
+            python src/live.py --until 12:30; NEXT=1
+          elif [ "$HM" -lt 1630 ]; then
+            python src/live.py --until 17:30; NEXT=1
           else
             python src/live.py
           fi
+          if [ "$NEXT" = 1 ]; then
+            gh api -X POST repos/${{ github.repository }}/actions/workflows/live.yml/dispatches -f ref=main -f 'inputs[mode]=live' \
+              && echo "次の部を呼びました"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: 止まったら知らせる
         if: ${{ !success() && (github.event_name == 'schedule' || inputs.mode != 'test') }}
