@@ -56,7 +56,10 @@ def build_day(day: dt.date, known, now):
     sp = PRED / f"schedule_{ymd}.csv"
     if sp.exists():
         for r in pd.read_csv(sp, dtype={"venue_code": str}).itertuples():
-            races[(r.venue_code, int(r.race_no))] = {"deadline": r.deadline}
+            races[(r.venue_code, int(r.race_no))] = {
+                "deadline": r.deadline,
+                "grade": getattr(r, "grade", "") if isinstance(getattr(r, "grade", ""), str) else "",
+                "race_name": getattr(r, "race_name", "") if isinstance(getattr(r, "race_name", ""), str) else ""}
     lp = PRED / f"live_{ymd}.csv"
     preds = pd.read_csv(lp, dtype={"venue_code": str}) if lp.exists() else pd.DataFrame()
     for r in preds.itertuples():
@@ -125,7 +128,21 @@ def main():
                      "return": int(s["return"].sum()) if len(s) else 0,
                      "hits": int(s["hit"].sum()) if len(s) else 0})
     tot = {k: sum(r[k] for r in rows) for k in ["bets", "settled", "stake", "return", "hits"]}
-    write_site("days.json", {"updated": now.strftime("%Y-%m-%d %H:%M"), "total": tot, "days": rows[::-1]}, pw)
+    # 🏆 SG・G1 のレースだけの累計
+    gtot = {"bets": 0, "settled": 0, "stake": 0, "return": 0, "hits": 0}
+    try:
+        from grade import BIG
+        from settle_live import with_grades
+        if len(b):
+            bg = with_grades(b)
+            bg = bg[bg["grade"].isin(BIG)]
+            s = bg[bg.settled]
+            gtot = {"bets": int(len(bg)), "settled": int(len(s)), "stake": int(s.stake.sum()),
+                    "return": int(s["return"].sum()), "hits": int(s["hit"].sum())}
+    except Exception as e:
+        print("グレード別の集計に失敗:", e)
+    write_site("days.json", {"updated": now.strftime("%Y-%m-%d %H:%M"), "total": tot, "grade_total": gtot,
+                             "days": rows[::-1]}, pw)
 
 
 if __name__ == "__main__":

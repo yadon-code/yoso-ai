@@ -25,7 +25,8 @@ from backtest import COMBOS, TAKEOUT, harville  # noqa: E402
 from download_beforeinfo import fetch_race as fetch_bi  # noqa: E402
 from download_odds import fetch_race as fetch_odds  # noqa: E402
 from features import FEATURES, KEY, build  # noqa: E402
-from notify import race_message, send  # noqa: E402
+from notify import grade_message, race_message, send  # noqa: E402
+from grade import ROOM as GRADE_ROOM, is_big, today_grades  # noqa: E402
 import json  # noqa: E402
 import market_model as mm  # noqa: E402
 from download_bc import BASE as BC_BASE, get as bc_get, parse_oriten  # noqa: E402
@@ -155,19 +156,20 @@ def save_odds_snapshot(day, key, deadline_dt, odds_rows):
     append_rows(ROOT / "data" / "odds_pre" / f"pre_{day:%Y%m%d}.csv", [row])
 
 
-def record(day, key, p, p3, picks, has_exhibit, model="v1"):
+def record(day, key, p, p3, picks, has_exhibit, model="v1", grade=""):
     now = dt.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
     top = np.argsort(-p3)[:5]
     row = {"date": key[0], "venue_code": key[1], "race_no": key[2], "predicted_at": now,
            "exhibit": has_exhibit, "p_win": " ".join(f"{x:.3f}" for x in p),
            "top5": " ".join(f"{COMBOS[i]}:{p3[i]:.3f}" for i in top),
            "picks": " ".join(f"{c}({o:.1f}倍,期待値{e:.2f})" for c, o, e, _ in picks),
-           "model": model}  # v2=第2段階（オッズのズレ補正）、v1=第1段階だけ（第2段階が使えなかったとき）
+           "model": model, "grade": grade}  # v2=第2段階（オッズのズレ補正）、v1=第1段階だけ（第2段階が使えなかったとき）
     append_rows(ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv", [row])
     if picks and has_exhibit:  # エア投票は、展示を見たうえでの本番と同じ条件の予想だけ記録する
         led = ROOT / "data" / "paper" / "bets.csv"
         rows = [{"date": key[0], "venue_code": key[1], "race_no": key[2], "combo": c, "odds_at_pick": o,
-                 "ev": round(e, 3), "prob": round(b, 5), "picked_at": now, "stake": 100, "model": model}
+                 "ev": round(e, 3), "prob": round(b, 5), "picked_at": now, "stake": 100, "model": model,
+                 "grade": grade}
                 for c, o, e, b in picks]
         append_rows(led, rows)
     return row
@@ -186,13 +188,18 @@ def main():
     booster = lgb.Booster(model_file=str(ROOT / "models" / "win_model.txt"))
     mmodel = load_market_model()
     print("第2段階モデル:", "あり" if mmodel else "なし（第1段階だけで予想）", flush=True)
-    sched = prog.drop_duplicates(KEY)[KEY + ["venue", "deadline"]].copy()
+    sched = prog.drop_duplicates(KEY)[KEY + ["venue", "deadline", "race_name"]].copy()
+    sched["race_name"] = sched["race_name"].fillna("")
+    grades = today_grades(day)
+    sched["grade"] = sched["venue_code"].map(grades).fillna("")
+    big = sorted({r.venue for r in sched.itertuples() if is_big(r.grade)})
+    print("グレードレース:", "、".join(big) if big else "なし", flush=True)
     sched["deadline_dt"] = sched["deadline"].map(
         lambda t: dt.datetime.combine(day, dt.time(*map(int, t.split(":"))), JST) if isinstance(t, str) else None)
     sched = sched.dropna(subset=["deadline_dt"]).sort_values("deadline_dt")
     sp = ROOT / "data" / "predictions" / f"schedule_{day:%Y%m%d}.csv"
     sp.parent.mkdir(parents=True, exist_ok=True)
-    sched[KEY + ["venue", "deadline"]].to_csv(sp, index=False)  # ウェブアプリ用の出走表（締切時刻）
+    sched[KEY + ["venue", "deadline", "grade", "race_name"]].to_csv(sp, index=False)  # ウェブアプリ用の出走表（締切時刻）
     done_path = ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv"
     done = set()
     if done_path.exists():
@@ -239,11 +246,13 @@ def main():
                 v2_errors += 1
                 if v2_errors == 3 and not a.no_notify:  # 続けて起きているときだけ、1回知らせる
                     send(f"⚠️ 第2段階の予想でエラーが続いています（{e}）。第1段階だけで予想を続けます。")
-        row = record(day, key, p, p3, picks, has_ex, model)
+        row = record(day, key, p, p3, picks, has_ex, model, r.grade)
         print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
               f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}", flush=True)
         if picks and has_ex and not a.no_notify:
             send(race_message(r.venue, r.race_no, r.deadline, p, picks), room=f"🚤 {r.venue}")
+        if is_big(r.grade) and has_ex and not a.no_notify:  # SG・G1は買い目がなくても予想を知らせる
+            send(grade_message(r.grade, r.venue, r.race_no, r.race_name, r.deadline, p, p3, picks), room=GRADE_ROOM)
 
     # 最終レースの結果が出るころ（締切から20分後）に、1日のまとめを通知する
     if not a.once and not a.no_notify and len(sched):

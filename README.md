@@ -67,3 +67,10 @@ python3 src/backtest.py                          # 回収率を検証
 ## あとで検証に使う記録
 - `data/odds_pre/pre_YYYYMMDD.csv`：予想した時点（締切の約5分前）の3連単オッズ120通り。1行=1レース、`odds` は `backtest.COMBOS` の順に空白区切り（空は発売なし）
 - 予想・エア投票の `model` 列：`v2`=第2段階（オッズのズレ補正）、`v1`=第1段階だけで出した買い目
+
+## 🏆 グレードレース（SG・G1）
+- 毎朝、公式サイトから各場のグレードを調べ（`src/grade.py`）、出走表メモ `data/predictions/schedule_YYYYMMDD.csv` の `grade` 列に残します。
+- SG・G1 のレースは、買い目がなくても予想（1着確率・当たりやすい組）を Discord の「🏆 グレードレース」に投稿します。
+- 毎日のまとめとウェブアプリに、SG・G1 だけのエア投票の成績を別に出します（ウェブは「🏆 SG・G1」で絞り込み）。
+- 予想の中身は普段と同じAIです。グレード専用の補正は過去データで効果が確かめられなかったため入れていません（docs/グレードレース分析.md）。
+  月1回の見直しで `python src/download_grade.py 2024-01-01` → `python src/analyze_grade.py` を動かして再確認します。
