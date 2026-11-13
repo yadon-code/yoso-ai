@@ -14,11 +14,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 
-import requests
+import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "csv" / "grades.csv"
 URL = "https://www.boatrace.jp/owpc/pc/race/index?hd={hd}"
+WORKERS = 8
 
 # 公式ページのクラス名 → グレード（a/b は表示用の色違いなので同じ扱い）
 GRADE_MAP = {"SG": "SG", "PG1": "G1", "G1": "G1", "G2": "G2", "G3": "G3", "ippan": "一般"}
@@ -33,15 +34,16 @@ def fetch_day(d: date):
     hd = d.strftime("%Y%m%d")
     for attempt in range(4):
         try:
-            r = requests.get(URL.format(hd=hd), timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-            r.raise_for_status()
+            req = urllib.request.Request(URL.format(hd=hd), headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                text = r.read().decode("utf-8", "replace")
             break
         except Exception:
             time.sleep(2 * (attempt + 1))
     else:
         return d, None
     rows = []
-    for tb in re.findall(r"<tbody>(.*?)</tbody>", r.text, re.S):
+    for tb in re.findall(r"<tbody>(.*?)</tbody>", text, re.S):
         j = re.search(r"jcd=(\d\d)", tb)
         g = re.search(r'class="[^"]*\bis-(SG[ab]?|PG1[ab]?|G[123][ab]?|ippan)\b', tb)
         if j and g:
@@ -60,7 +62,7 @@ def main():
     days = [d for d in days if d.isoformat() not in done]
     new = not OUT.exists()
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    with OUT.open("a", newline="", encoding="utf-8") as f, ThreadPoolExecutor(4) as ex:
+    with OUT.open("a", newline="", encoding="utf-8") as f, ThreadPoolExecutor(WORKERS) as ex:
         w = csv.writer(f)
         if new:
             w.writerow(["date", "jcd", "grade"])

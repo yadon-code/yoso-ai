@@ -85,7 +85,8 @@ def oof():
     出力: data/pred/oof_predictions.csv"""
     df = build()
     lab = lambda d: d["finish"].where(d["finish"] >= 1).fillna(6).clip(upper=4).astype(int) - 1
-    starts = pd.date_range("2025-01-01", "2027-01-01", freq="QS").strftime("%Y-%m-%d").tolist()
+    import os  # OOF_START で開始を変えられる（例: 2020-01-01。グレードレースの過去分の検証用）
+    starts = pd.date_range(os.environ.get("OOF_START", "2025-01-01"), "2027-01-01", freq="QS").strftime("%Y-%m-%d").tolist()
     outs = []
     for s, e in zip(starts[:-1], starts[1:]):
         es_start = (pd.Timestamp(s) - pd.DateOffset(months=2)).strftime("%Y-%m-%d")
@@ -112,7 +113,7 @@ def oof():
         part.parent.mkdir(parents=True, exist_ok=True)
         o.to_csv(part, index=False)
         outs.append(o)
-    pd.concat(outs).to_csv(ROOT / "data" / "pred" / "oof_predictions.csv", index=False)
+    pd.concat(outs).to_csv(ROOT / "data" / "pred" / os.environ.get("OOF_FILE", "oof_predictions.csv"), index=False)
 
 
 if __name__ == "__main__" and len(__import__("sys").argv) > 1 and __import__("sys").argv[1] == "oof":
