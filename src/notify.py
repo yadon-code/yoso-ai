@@ -73,25 +73,29 @@ def send(text: str, room: str = "📢 お知らせ") -> bool:
     return ok
 
 
-def race_message(venue, race_no, deadline, p_win, picks):
+def race_message(venue, race_no, deadline, p_win, picks, tenkai=None):
     """1レース分の買い目通知の文面。picks = [(組番, オッズ, 期待値, 確率), ...]"""
     honmei = max(range(6), key=lambda i: p_win[i]) + 1
     lines = [f"🚤 **{venue} {race_no}R**（締切 {deadline}）",
              "1着確率: " + " / ".join(f"{i + 1}号艇 {p:.0%}" for i, p in enumerate(p_win)),
              f"本命: {honmei}号艇"]
+    if tenkai:
+        lines.append(f"展開: {tenkai}")
     if picks:
         lines.append("買い目（各100円）:")
         lines += [f"・{c}  {o:.1f}倍  期待値{e:.2f}" for c, o, e, _ in picks]
     return "\n".join(lines)
 
 
-def grade_message(grade, venue, race_no, race_name, deadline, p_win, p3, picks):
+def grade_message(grade, venue, race_no, race_name, deadline, p_win, p3, picks, tenkai=None):
     """SG・G1のレースの通知。買い目がなくても、1着確率と当たりやすい組を出す。"""
     from backtest import COMBOS
     order = sorted(range(len(p3)), key=lambda i: -p3[i])[:5]
     lines = [f"🏆 **{grade} {venue} {race_no}R {race_name}**（締切 {deadline}）",
              "1着確率: " + " / ".join(f"{i + 1}号艇 {p:.0%}" for i, p in enumerate(p_win)),
              "当たりやすい順: " + " / ".join(f"{COMBOS[i]} {p3[i]:.1%}" for i in order)]
+    if tenkai:
+        lines.append(f"展開: {tenkai}")
     if picks:
         lines.append("買い目（各100円）:")
         lines += [f"・{c}  {o:.1f}倍  期待値{e:.2f}" for c, o, e, _ in picks]
