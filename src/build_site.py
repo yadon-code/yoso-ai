@@ -68,6 +68,12 @@ def build_day(day: dt.date, known, now):
                   "p_win": [float(x) for x in str(r.p_win).split()],
                   "top5": [{"combo": t.split(":")[0], "prob": float(t.split(":")[1])} for t in str(r.top5).split()],
                   "picks": parse_picks(r.picks)})
+        tk = getattr(r, "tenkai", "")
+        if isinstance(tk, str) and tk.strip():  # 展開予想（7パターンの確率）
+            from tenkai import NAMES
+            d["tenkai"] = [{"name": n, "prob": float(x)} for n, x in zip(NAMES, tk.split())]
+            nt = getattr(r, "tenkai_note", "")
+            d["tenkai_note"] = nt if isinstance(nt, str) else ""
     if not races:
         return None
     # 締切を8分以上過ぎたレースの結果を調べる（4つ同時に）

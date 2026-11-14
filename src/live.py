@@ -29,6 +29,7 @@ from notify import grade_message, race_message, send  # noqa: E402
 from grade import ROOM as GRADE_ROOM, is_big, today_grades  # noqa: E402
 import json  # noqa: E402
 import market_model as mm  # noqa: E402
+import tenkai  # noqa: E402
 from download_bc import BASE as BC_BASE, get as bc_get, parse_oriten  # noqa: E402
 from settle_live import summary  # noqa: E402
 from predict import ROOT, SETTINGS, bi_wind_index, todays_programs, update_history  # noqa: E402
@@ -156,14 +157,16 @@ def save_odds_snapshot(day, key, deadline_dt, odds_rows):
     append_rows(ROOT / "data" / "odds_pre" / f"pre_{day:%Y%m%d}.csv", [row])
 
 
-def record(day, key, p, p3, picks, has_exhibit, model="v1", grade=""):
+def record(day, key, p, p3, picks, has_exhibit, model="v1", grade="", tk=None):
     now = dt.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
     top = np.argsort(-p3)[:5]
     row = {"date": key[0], "venue_code": key[1], "race_no": key[2], "predicted_at": now,
            "exhibit": has_exhibit, "p_win": " ".join(f"{x:.3f}" for x in p),
            "top5": " ".join(f"{COMBOS[i]}:{p3[i]:.3f}" for i in top),
            "picks": " ".join(f"{c}({o:.1f}倍,期待値{e:.2f})" for c, o, e, _ in picks),
-           "model": model, "grade": grade}  # v2=第2段階（オッズのズレ補正）、v1=第1段階だけ（第2段階が使えなかったとき）
+           "model": model, "grade": grade,
+           "tenkai": tenkai.encode(tk[0]) if tk else "", "tenkai_note": tk[1] if tk else ""}  # 展開予想（7パターンの確率）
+    # v2=第2段階（オッズのズレ補正）、v1=第1段階だけ（第2段階が使えなかったとき）
     append_rows(ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv", [row])
     if picks and has_exhibit:  # エア投票は、展示を見たうえでの本番と同じ条件の予想だけ記録する
         led = ROOT / "data" / "paper" / "bets.csv"
@@ -236,6 +239,7 @@ def main():
             print("オッズの保存に失敗:", e, flush=True)
         p, p3, picks = predict_race(booster, g, odds_rows)
         model = "v1"
+        ori = None
         if mmodel and has_ex and len(odds_rows) == 120 and all(x["odds"] for x in odds_rows):
             try:
                 ori = fetch_oriten(r.date, r.venue_code, r.race_no)
@@ -246,13 +250,22 @@ def main():
                 v2_errors += 1
                 if v2_errors == 3 and not a.no_notify:  # 続けて起きているときだけ、1回知らせる
                     send(f"⚠️ 第2段階の予想でエラーが続いています（{e}）。第1段階だけで予想を続けます。")
-        row = record(day, key, p, p3, picks, has_ex, model, r.grade)
+        tk = None
+        if has_ex:
+            try:  # 展開予想（失敗しても予想本体は止めない）
+                if ori is None:
+                    ori = fetch_oriten(r.date, r.venue_code, r.race_no)
+                tk = tenkai.predict_race(prog[(prog.venue_code == r.venue_code) & (prog.race_no == r.race_no)], bi, ori)
+            except Exception as e:
+                print("展開予想でエラー:", e, flush=True)
+        tk_text = tenkai.text(*tk) if tk else None
+        row = record(day, key, p, p3, picks, has_ex, model, r.grade, tk)
         print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
-              f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}", flush=True)
+              f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}  展開: {tk_text or '-'}", flush=True)
         if picks and has_ex and not a.no_notify:
-            send(race_message(r.venue, r.race_no, r.deadline, p, picks), room=f"🚤 {r.venue}")
+            send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text), room=f"🚤 {r.venue}")
         if is_big(r.grade) and has_ex and not a.no_notify:  # SG・G1は買い目がなくても予想を知らせる
-            send(grade_message(r.grade, r.venue, r.race_no, r.race_name, r.deadline, p, p3, picks), room=GRADE_ROOM)
+            send(grade_message(r.grade, r.venue, r.race_no, r.race_name, r.deadline, p, p3, picks, tk_text), room=GRADE_ROOM)
 
     # 最終レースの結果が出るころ（締切から20分後）に、1日のまとめを通知する
     if not a.once and not a.no_notify and len(sched):

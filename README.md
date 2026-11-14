@@ -22,7 +22,8 @@
 │   ├── download_odds.py 3連単の締切オッズを集める
 │   ├── features.py      AIに渡す情報（特徴量）を作る
 │   ├── train.py         1着確率のAIモデルを学習する
-│   └── backtest.py      過去のレースで回収率を検証する
+│   ├── backtest.py      過去のレースで回収率を検証する
+│   └── tenkai.py        展開予想（展示から「逃げ・差し・まくり」などの確率を出す）
 ├── models/
 │   └── win_model.txt    学習済みのAIモデル
 └── data/

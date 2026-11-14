@@ -1,0 +1,8 @@
+{
+ "test_from": "2026-05-07",
+ "test_races": 28477,
+ "rounds": 193,
+ "logloss_venue_avg": 1.4836,
+ "logloss_model": 1.3613,
+ "trained_until": "2026-11-07"
+}
