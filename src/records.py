@@ -342,13 +342,27 @@ def remote_sha(branch):
     raise Fail(f"GitHub の {branch} ブランチを確かめられませんでした")
 
 
+def fetch(branch, tries=5):
+    """GitHub のブランチを取り込む。一時的なネットの途切れで止まらないよう、少し待って数回やり直す。"""
+    err = ""
+    for i in range(tries):
+        r = run(["git", "fetch", "-q", "--no-tags", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"])
+        if r.returncode == 0:
+            return
+        err = r.stderr.decode("utf-8", "replace").strip()[:200]
+        log(f"{branch} の取り込みに失敗（{i + 1}回目）: {err}")
+        if i < tries - 1:
+            time.sleep(10 * (i + 1))
+    raise Fail(f"GitHub の {branch} ブランチを取り込めませんでした（{err}）")
+
+
 def fetch_site_branch():
     sha = remote_sha(BRANCH)
     if sha:
-        run(["git", "fetch", "-q", "--no-tags", "origin", f"+refs/heads/{BRANCH}:refs/remotes/origin/{BRANCH}"],
-            check=True)
+        fetch(BRANCH)
         if out(["git", "rev-parse", f"refs/remotes/origin/{BRANCH}"]) != sha:
-            raise Fail(f"{BRANCH} ブランチを取り込めませんでした")
+            fetch(BRANCH)   # 取り込むあいだに先へ進んでいた（ふつうは起きない）
+            sha = out(["git", "rev-parse", f"refs/remotes/origin/{BRANCH}"])
     return sha
 
 
@@ -358,8 +372,8 @@ def guard(remote: Source, pw, site=False):
     probs = []
     try:
         rrec = remote.records(pw)
-    except Locked as e:
-        log(f"保存先（{remote.label}）の金庫を今の合言葉で開けないので（{e}）、日付だけ比べます")
+    except Exception as e:   # 合言葉ちがい（Locked）・壊れている など
+        log(f"保存先（{remote.label}）の金庫を開けないので（{type(e).__name__}: {e}）、日付だけ比べます")
         lost = remote.vault_days() - record_days(local)
         if lost:
             probs.append(f"記録の日が {len(lost)}日 減る（{min(lost)} など）")
@@ -380,71 +394,92 @@ def guard(remote: Source, pw, site=False):
 # ---------- 回の始め: 記録を戻す ----------
 
 def restore():
+    """戻せたら0。戻せなければ1で、.git/records-restore-failed（合言葉が原因なら records-restore-locked も）を作る。
+    印は「始める前に」失敗の側を付けておき、うまくいったら付け替える（途中で落ちても失敗のまま残る）。"""
     gd = git_dir()
-    ok_mark, ng_mark = gd / "records-restored", gd / "records-restore-failed"
+    ok_mark, ng_mark, lock_mark = gd / "records-restored", gd / "records-restore-failed", gd / "records-restore-locked"
     ok_mark.unlink(missing_ok=True)
-    ng_mark.unlink(missing_ok=True)
-    pw = sitecrypt.password()
+    lock_mark.unlink(missing_ok=True)
+    ng_mark.write_text("記録を戻す途中で止まりました")
     try:
-        cands = []
-        if (SNAP / "STAMP.json").exists():
-            cands.append(dir_source(SNAP, "キャッシュ"))
-        if fetch_site_branch():
-            cands.append(tree_source(f"refs/remotes/origin/{BRANCH}", f"{BRANCH} ブランチ"))
-        cands.append(tree_source("HEAD", "main"))
-        readable, locked = [], []
-        for rank, c in enumerate(cands):   # 同じ時刻なら キャッシュ → site-data → main の順
-            if c.empty():
-                log(f"・{c.label}: 記録なし")
-                continue
-            try:
-                recs = c.records(pw)
-                readable.append((c.saved_at, -rank, c, recs))
-                log(f"・{c.label}: {len(recs)}ファイル（保存 {c.saved_at or '時刻なし＝金庫を作る前の形'}）")
-            except Locked as e:
-                locked.append(c)
-                log(f"・{c.label}: 金庫を開けません（{e}。保存 {c.saved_at or '?'}）")
-        readable.sort(key=lambda x: x[:2], reverse=True)
-        newest_locked = max((c.saved_at for c in locked), default=None)
-        if newest_locked is not None and (not readable or newest_locked > readable[0][0]):
+        return _restore(ok_mark, ng_mark, lock_mark)
+    except BaseException as e:   # 思っていなかった失敗（lzma が壊れている・ディスクがいっぱい など）も、戻せなかった扱いにする
+        msg = str(e) if isinstance(e, (Fail, Locked)) else f"思っていなかった失敗 {type(e).__name__}: {e}"
+        try:
+            ng_mark.write_text(msg)
+        except Exception:
+            pass   # 印は始める前に付けてあるので、書き直せなくても「失敗」のまま
+        gh("error", "記録を戻せません", msg)
+        if not isinstance(e, Exception):
+            raise
+        return 1
+
+
+def _restore(ok_mark, ng_mark, lock_mark):
+    pw = sitecrypt.password()
+    cands = []
+    if (SNAP / "STAMP.json").exists():
+        cands.append(dir_source(SNAP, "キャッシュ"))
+    if fetch_site_branch():
+        cands.append(tree_source(f"refs/remotes/origin/{BRANCH}", f"{BRANCH} ブランチ"))
+    cands.append(tree_source("HEAD", "main"))
+    readable, locked = [], []
+    for rank, c in enumerate(cands):   # 同じ時刻なら キャッシュ → site-data → main の順
+        if c.empty():
+            log(f"・{c.label}: 記録なし")
+            continue
+        try:
+            recs = c.records(pw)
+            readable.append((c.saved_at, -rank, c, recs))
+            log(f"・{c.label}: {len(recs)}ファイル（保存 {c.saved_at or '時刻なし＝金庫を作る前の形'}）")
+        except Exception as e:   # 合言葉ちがい（Locked）か、壊れている（lzma の失敗など）
+            locked.append((c, isinstance(e, Locked)))
+            log(f"・{c.label}: 金庫を開けません（{type(e).__name__}: {e}。保存 {c.saved_at or '?'}）")
+    readable.sort(key=lambda x: x[:2], reverse=True)
+    top = readable[0][0] if readable else None
+    newer = [(c, by_pw) for c, by_pw in locked if top is None or c.saved_at > top]
+    if newer:   # 開けないものが、開けるものより新しい → 戻すと記録が欠けるので止める
+        if any(by_pw for _, by_pw in newer):
+            lock_mark.write_text("合言葉")
             raise Fail("いちばん新しい記録が金庫の中にあるのに、今の合言葉で開けません。"
                        "合言葉（SITE_PASSWORD）を変えた・消したなら元に戻してください。"
                        "古い記録や空から始めると記録が欠けるので、ここで止めます")
-        if not readable:
-            log("記録はまだありません（はじめから）")
-        else:
-            merged = {}   # ファイルごとに、いちばん行の多いもの（同じなら新しい置き場のもの）
-            for _, _, c, recs in readable:
-                for p, b in recs.items():
-                    if p not in merged or nlines(b) > nlines(merged[p][0]):
-                        merged[p] = (b, c.label)
-            changed = 0
-            for p, (b, _) in merged.items():
-                dest = DATA / p
-                if not dest.exists() or dest.read_bytes() != b:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(b)
-                    changed += 1
-            site = {}
-            for _, _, c, _ in reversed(readable):   # ウェブ用データは新しい置き場のものを優先
-                site.update({p: b for p, b in c.files.items() if p.startswith("site/")})
-            for p, b in site.items():
-                dest = DATA / p
-                if not dest.exists() or dest.read_bytes() != b:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(b)
-            best = readable[0][2]
-            from_other = sum(1 for b, lbl in merged.values() if lbl != best.label)
-            log(f"記録を戻しました: 戻し元＝{best.label}（保存 {best.saved_at or '時刻なし'}）"
-                f"{f'＋ほかの置き場から {from_other}ファイル' if from_other else ''}・"
-                f"{len(merged)}ファイル・{len(record_days({p: v[0] for p, v in merged.items()}))}日分"
-                f"（書き直し {changed}）・ウェブ用 {len(site_days(site))}日分")
-        ok_mark.write_text(now_stamp())
-        return 0
-    except (Fail, Locked) as e:
-        ng_mark.write_text(str(e))
-        gh("error", "記録を戻せません", str(e))
-        return 1
+        raise Fail("いちばん新しい記録の金庫が壊れていて開けません（" + "・".join(c.label for c, _ in newer) +
+                   "）。古い記録から始めると記録が欠けるので、ここで止めます")
+    for c, _ in locked:
+        log(f"（{c.label} は開けないが、ほかにもっと新しい記録があるので使いません。次の保存で正しい中身に置き換わります）")
+    if not readable:
+        log("記録はまだありません（はじめから）")
+    else:
+        merged = {}   # ファイルごとに、いちばん行の多いもの（同じなら新しい置き場のもの）
+        for _, _, c, recs in readable:
+            for p, b in recs.items():
+                if p not in merged or nlines(b) > nlines(merged[p][0]):
+                    merged[p] = (b, c.label)
+        changed = 0
+        for p, (b, _) in merged.items():
+            dest = DATA / p
+            if not dest.exists() or dest.read_bytes() != b:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(b)
+                changed += 1
+        site = {}
+        for _, _, c, _ in reversed(readable):   # ウェブ用データは新しい置き場のものを優先
+            site.update({p: b for p, b in c.files.items() if p.startswith("site/")})
+        for p, b in site.items():
+            dest = DATA / p
+            if not dest.exists() or dest.read_bytes() != b:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(b)
+        best = readable[0][2]
+        from_other = sum(1 for b, lbl in merged.values() if lbl != best.label)
+        log(f"記録を戻しました: 戻し元＝{best.label}（保存 {best.saved_at or '時刻なし'}）"
+            f"{f'＋ほかの置き場から {from_other}ファイル' if from_other else ''}・"
+            f"{len(merged)}ファイル・{len(record_days({p: v[0] for p, v in merged.items()}))}日分"
+            f"（書き直し {changed}）・ウェブ用 {len(site_days(site))}日分")
+    ok_mark.write_text(now_stamp())
+    ng_mark.unlink(missing_ok=True)
+    return 0
 
 
 # ---------- 保存 ----------
@@ -490,32 +525,45 @@ def push_site(pw):
     return False
 
 
+def main_tree(base, add, remove):
+    """GitHub の main（base）の中身を土台に、add を作業フォルダの今の中身に置き換え、remove を外した tree を作る。
+    作業フォルダ・index・HEAD には触らない（pull --rebase で積み直すと、外した記録のファイルが作業フォルダから消えるため）。"""
+    idx = git_dir() / "main-save.index"
+    idx.unlink(missing_ok=True)
+    env = {**os.environ, "GIT_INDEX_FILE": str(idx)}
+    run(["git", "read-tree", base], env=env, check=True)
+    gone = list(remove) + list(add)
+    if gone:
+        # 仮の index の中だけの操作なので -f（HEAD・作業フォルダとの食いちがいを気にしない）
+        run(["git", "rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--"] + gone, env=env, check=True)
+    have = [p for p in add if (ROOT / p).exists()]
+    if have:
+        run(["git", "add", "-f", "--"] + have, env=env, check=True)
+    tree = out(["git", "write-tree"], env=env)
+    idx.unlink(missing_ok=True)
+    return tree
+
+
 def push_main(pw, add, remove=()):
-    """main にコミットして送る。送る前に、main の記録より減らないかを確かめる（取り込みのたびに確かめ直す）。"""
-    run(["git", "fetch", "-q", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], check=True)
-    probs = guard(tree_source("refs/remotes/origin/main", "main"), pw)
-    if probs:
-        gh("error", "main に保存しません", "今の記録が main より少ないため: " + "／".join(probs[:5]))
-        return False
-    add = [p for p in add if (ROOT / p).exists()]
-    if add:
-        run(["git", "add", "-f", "--"] + add, check=True)
-    if remove:
-        run(["git", "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--"] + list(remove), check=True)
-    if run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
-        log("main: 変わったところが無いので送りません")
-        return True
-    run(["git", "commit", "-q", "-m", f"予想記録 {dt.datetime.now(JST):%Y-%m-%d %H:%M}"], check=True)
+    """main に1コミット足して送る。送る前に、main の記録より減らないかを確かめる。
+    main が先に進んでいて断られたら、取り込み直して、組み立て直す（3回まで）。"""
     for i in range(3):
-        if run(["git", "pull", "-q", "--rebase", "--autostash"]).returncode == 0:
-            probs = guard(tree_source("refs/remotes/origin/main", "main"), pw)
-            if probs:
-                gh("error", "main に保存しません", "今の記録が main より少ないため: " + "／".join(probs[:5]))
-                return False
-            if run(["git", "push", "-q"]).returncode == 0:
-                log("main に保存しました")
-                return True
-        run(["git", "rebase", "--abort"])   # 途中で止まった取り込みを片付けてからやり直す
+        fetch("main")
+        base = out(["git", "rev-parse", "refs/remotes/origin/main"])
+        probs = guard(tree_source(base, "main"), pw)
+        if probs:
+            gh("error", "main に保存しません", "今の記録が main より少ないため: " + "／".join(probs[:5]))
+            return False
+        tree = main_tree(base, add, remove)
+        if tree == out(["git", "rev-parse", f"{base}^{{tree}}"]):
+            log("main: 変わったところが無いので送りません")
+            return True
+        commit = out(["git", "commit-tree", tree, "-p", base, "-m", f"予想記録 {dt.datetime.now(JST):%Y-%m-%d %H:%M}"])
+        r = run(["git", "push", "-q", "origin", f"{commit}:refs/heads/main"])
+        if r.returncode == 0:
+            log("main に保存しました")
+            return True
+        log(f"main への保存に失敗（{i + 1}回目）: {r.stderr.decode('utf-8', 'replace').strip()[:200]}")
         time.sleep(5)
     return False
 
@@ -525,8 +573,10 @@ def save(final):
     if (gd / "records-restore-failed").exists():
         gh("error", "記録の保存", "この回は記録を戻せなかったので、保存しません（空や古い記録で上書きしないため）")
         return 1
-    if not (gd / "records-restored").exists():
-        gh("warning", "記録の保存", "記録を戻す手順を通っていない回です。保存先より記録が減らないことを確かめてから保存します")
+    restored = (gd / "records-restored").exists()
+    if not restored:   # 切り替えの最中に前の workflow の回が新しい保存を拾ったとき など
+        gh("warning", "記録の保存", "記録を戻す手順を通っていない回です。保存先より記録が減らないことを確かめてから保存します"
+                                 "（キャッシュの写しは作りません）")
     pw = sitecrypt.password()
     legacy = not pw or os.environ.get("RECORDS_MODE") == "legacy"
     ok = True
@@ -540,7 +590,8 @@ def save(final):
             gh("error", "記録の金庫", f"金庫を作れませんでした（{type(e).__name__}: {e}）")
             ok = vault_ok = False
     try:
-        snapshot(vault_saved)
+        if restored:   # 戻していない回の中身は足りないことがあるので、キャッシュの写しを上書きしない
+            snapshot(vault_saved)
     except Exception as e:
         gh("warning", "記録の写し", f"キャッシュ用の写しを作れませんでした（{type(e).__name__}: {e}）")
     site_ok = vault_ok and push_site(pw)
@@ -564,8 +615,8 @@ def main():
             return restore()
         if cmd == "save":
             return save(len(sys.argv) > 2 and sys.argv[2] == "final")
-    except (Fail, Locked) as e:
-        gh("error", "記録の保存", str(e))
+    except Exception as e:
+        gh("error", "記録の保存", f"{type(e).__name__}: {e}")
         return 1
     print(__doc__)
     return 2

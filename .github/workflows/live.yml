@@ -49,6 +49,7 @@ jobs:
         run: python src/notify.py "✅ 予想AIの通知テストです。これが届いていれば設定OK！"
 
       - name: 過去データを復元
+        id: data_restore
         if: github.event_name == 'schedule' || inputs.mode != 'test'
         uses: actions/cache/restore@v4
         with:
@@ -60,6 +61,7 @@ jobs:
           restore-keys: data-
 
       - name: 初回だけ過去データを展開
+        id: data_ready   # 成功したら data/raw・data/csv がそろっている（キャッシュから戻したか、seed から作った）
         if: github.event_name == 'schedule' || inputs.mode != 'test'
         run: |
           if [ ! -d data/raw/K ]; then unzip -q seed/raw.zip -d data/; fi
@@ -69,6 +71,7 @@ jobs:
       # 予想・エア投票などの記録を、キャッシュ（data/cache/records）・site-data ブランチ・main の金庫のうち新しいものから戻す。
       # 戻せないとき（合言葉が変わった など）は、空から始めて記録を上書きしないよう、ここで止める。
       - name: 予想とエア投票の記録を戻す
+        id: records
         if: github.event_name == 'schedule' || inputs.mode != 'test'
         run: python src/records.py restore
 
@@ -80,6 +83,7 @@ jobs:
           # 10分ごとにウェブアプリ用のデータを保存する（裏で動かす）
           ( while sleep 600; do bash scripts/push_data.sh; done ) &
           LOOP=$!
+          trap 'kill $LOOP 2>/dev/null || true' EXIT   # 予想が途中で落ちても、10分ごとの保存を止める（最後の保存は下の手順で）
           # 予約時刻はGitHubの都合で30〜40分遅れることがあるので、時刻ではなく「始まった時点の時刻」で部を決め、
           # 朝・昼の部は終わった瞬間に次の部を自分で呼ぶ（予約はその予備）
           HM=$(date +%H%M)
@@ -92,7 +96,6 @@ jobs:
           else
             python src/live.py
           fi
-          kill $LOOP 2>/dev/null || true   # 10分ごとの保存を止める（最後の保存は下の手順で）
           if [ "$NEXT" = 1 ]; then
             gh api -X POST repos/${{ github.repository }}/actions/workflows/live.yml/dispatches -f ref=main -f 'inputs[mode]=live' \
               && echo "次の部を呼びました"
@@ -102,18 +105,27 @@ jobs:
 
       - name: 止まったら知らせる
         if: ${{ !success() && (github.event_name == 'schedule' || inputs.mode != 'test') }}
-        run: python src/notify.py "⚠️ 自動予想が途中で止まりました。次の回（朝・昼・夜）でまた動きます。くわしくは ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          if [ -f "$(git rev-parse --git-dir)/records-restore-locked" ]; then
+            # 合言葉で記録の金庫を開けなかったときは、直るまで毎回止まるので、合言葉を確かめてもらう
+            python src/notify.py "⚠️ 自動予想を止めました。予想とエア投票の記録の金庫が、今の合言葉（GitHub の Secret「SITE_PASSWORD」）で開けません。合言葉を変えた・消したなら、元の合言葉に戻してください（記録を空で上書きしないよう、直るまで毎回ここで止まります）。くわしくは ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            python src/notify.py "⚠️ 自動予想が途中で止まりました。次の回（朝・昼・夜）でまた動きます。くわしくは ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
 
+      # 記録を戻せた回だけ保存する（準備で失敗した回・戻せなかった回に、足りない記録で上書きしないため）。
+      # 予想の本体が途中で落ちた回も、戻せていれば保存する。
       - name: 予想とエア投票の記録をリポジトリに保存
-        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')
+        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test') && steps.records.outcome == 'success'
         # 先に記録を保存してから、その写し（data/cache/records）ごとキャッシュに入れる
         run: |
           git config user.name "yoso-ai bot"
           git config user.email "yoso-ai-bot@users.noreply.github.com"
           bash scripts/push_data.sh final
 
+      # 過去データがそろっていた回だけ保存する（準備で失敗した回に、data/raw・data/csv の無いものを最新として残さないため）
       - name: 過去データを保存
-        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')
+        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test') && steps.data_ready.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: |
