@@ -7,6 +7,13 @@ data/oriten/
 data/beforeinfo/
 data/pred/
 data/cache/
+# 予想・エア投票などの元の記録とウェブ用データは、合言葉つきの金庫（data/vault/）と site-data ブランチに置く（src/records.py）。
+# 合言葉が無いときだけ、前と同じく git add -f でそのまま入れる。
+data/predictions/
+data/paper/
+data/odds_pre/
+data/discord_threads.json
+data/site/
 *.log
 __pycache__/
 .env

@@ -29,6 +29,7 @@ from notify import grade_message, race_message, send  # noqa: E402
 from grade import ROOM as GRADE_ROOM, is_big, today_grades  # noqa: E402
 import json  # noqa: E402
 import market_model as mm  # noqa: E402
+import sitecrypt  # noqa: E402
 import tenkai  # noqa: E402
 from download_bc import BASE as BC_BASE, get as bc_get, parse_oriten  # noqa: E402
 from settle_live import summary  # noqa: E402
@@ -260,8 +261,12 @@ def main():
                 print("展開予想でエラー:", e, flush=True)
         tk_text = tenkai.text(*tk) if tk else None
         row = record(day, key, p, p3, picks, has_ex, model, r.grade, tk)
-        print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
-              f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}  展開: {tk_text or '-'}", flush=True)
+        if sitecrypt.password():  # 実行記録は公開なので、合言葉があるときは予想の中身を出さない
+            print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
+                  f"予想しました（{model}・買い目 {len(picks)}点）", flush=True)
+        else:
+            print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
+                  f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}  展開: {tk_text or '-'}", flush=True)
         if picks and has_ex and not a.no_notify:
             send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text), room=f"🚤 {r.venue}")
         if is_big(r.grade) and has_ex and not a.no_notify:  # SG・G1は買い目がなくても予想を知らせる

@@ -131,7 +131,9 @@ select{font:inherit;font-weight:600;padding:7px 10px;border-radius:8px;border:1p
   <p class="note">予想は締切の少し前、展示を見たあとに出します。「当たりやすい順」はAIが当たる確率が高いと見た組で、買い目とは別です。買い目は「AIの確率 × オッズ」が1を超えた割安な組（期待値1超え、100倍以下）で、1点100円の想定です。お金は使わない「エア投票」の記録で、まだ勝てると証明されたものではありません。 <button class="linkbtn" id="relock" hidden>カギをかけ直す</button></p>
 </div>
 <script>
-const BASE = 'https://raw.githubusercontent.com/yadon-code/yoso-ai/main/data/site/';
+// データの置き場: 自動予想が10分ごとに上書きする site-data ブランチ。まだ無いとき（切り替え直後など）は main を読む。
+const BASES = ['https://raw.githubusercontent.com/yadon-code/yoso-ai/site-data/data/site/',
+  'https://raw.githubusercontent.com/yadon-code/yoso-ai/main/data/site/'];
 const S = { days: null, day: null, data: null, venue: 'all', onlyBuy: false };
 const BIG = ['SG', 'G1'];  // 🏆 グレードレースとして目立たせるグレード
 const isBig = (r) => BIG.includes(r.grade);
@@ -156,16 +158,20 @@ async function decrypt(b64, pw) {
 }
 
 async function get(name) {
-  const enc = await fetch(BASE + name + '.enc?t=' + Date.now());
-  if (enc.ok) {
-    const pw = S.pw || savedPw();
-    if (!pw) throw new LockedError('');
-    try { const d = await decrypt(await enc.text(), pw); S.locked = true; return d; }
-    catch (e) { savePw(null); throw new LockedError('合言葉がちがいます'); }
+  let status = 0;
+  for (const base of BASES) {
+    const enc = await fetch(base + name + '.enc?t=' + Date.now());
+    if (enc.ok) {
+      const pw = S.pw || savedPw();
+      if (!pw) throw new LockedError('');
+      try { const d = await decrypt(await enc.text(), pw); S.locked = true; return d; }
+      catch (e) { savePw(null); throw new LockedError('合言葉がちがいます'); }
+    }
+    const r = await fetch(base + name + '?t=' + Date.now());  // カギなしのデータ
+    if (r.ok) return r.json();
+    status = r.status;
   }
-  const r = await fetch(BASE + name + '?t=' + Date.now());  // カギなしのデータ
-  if (!r.ok) throw new Error(r.status);
-  return r.json();
+  throw new Error(status);
 }
 
 function showLock(msg) {

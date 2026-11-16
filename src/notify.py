@@ -70,7 +70,10 @@ def send(text: str, room: str = "📢 お知らせ") -> bool:
     global _failures
     url = _webhook()
     if not url:
-        print(f"[通知（未設定なので表示だけ）] {room}\n" + text, flush=True)
+        if os.environ.get("SITE_PASSWORD"):  # 実行記録は公開なので、合言葉があるときは中身を出さない
+            print(f"[通知（未設定なので送りません）] {room}（{len(text)}文字）", flush=True)
+        else:
+            print(f"[通知（未設定なので表示だけ）] {room}\n" + text, flush=True)
         return False
     threads = json.loads(THREADS.read_text(encoding="utf-8")) if THREADS.exists() else {}
     ok = True

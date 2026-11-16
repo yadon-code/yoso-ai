@@ -56,14 +56,21 @@ python3 src/backtest.py                          # 回収率を検証
 各レースの締切5分前に予想して、買い目があれば Discord に通知します。最終レースの後に1日のまとめも届きます。
 
 - 通知先: リポジトリの Secret `DISCORD_WEBHOOK_URL`
-- 予想の記録: `data/predictions/live_YYYYMMDD.csv`、エア投票: `data/paper/bets.csv`（毎回自動で保存）
+- 予想の記録: `data/predictions/live_YYYYMMDD.csv`、エア投票: `data/paper/bets.csv`（置き場は下の「ウェブアプリのロック」）
 - 手動テスト: Actions → 「毎日の自動予想」→ Run workflow（mode: test でテスト通知だけ）
 - 過去データの初期値: `seed/raw.zip`（公式の番組表・競走成績）
 
 ## ウェブアプリのロック（合言葉）
 リポジトリの Secret `SITE_PASSWORD` に合言葉を入れると、ウェブアプリ用のデータ（`data/site/*.json.enc`）が暗号化され、
 ページを開くときに合言葉を聞かれるようになります（一度入れればその端末は覚えます）。Secret が無いあいだはカギなしです。
-※ 予想の元の記録（`data/predictions`、`data/paper`）は公開リポジトリの中にそのまま残ります。
+
+合言葉があるときの記録の置き場（`src/records.py`）:
+- 予想・エア投票・予想時点のオッズ・Discord の部屋のID（元の記録）は、同じ合言葉で暗号化した「金庫」`data/vault/` にまとめ、回の最後に main へ保存します（日ごとの束。中身が変わらない日は同じファイルのまま）。
+- ウェブアプリ用データと金庫の最新は、10分ごとに `site-data` ブランチへ保存します（いつも1コミットだけに上書きするので、履歴は積もりません）。ウェブアプリはここを読みます。
+- 回の始めに、Actions のキャッシュ（`data/cache/records/`）・`site-data`・main の金庫のうち新しいものから記録を戻します。合言葉が変わって開けないときは、記録を空で上書きしないよう、その回を止めます。
+- 合言葉を変えるときは、前の合言葉のまま1回動いたあと（キャッシュに写しがある間）に変えてください。次の回の最後に、新しい合言葉で金庫が作り直されます。
+- Secret が無いとき、または `live.yml` の `RECORDS_MODE` を `legacy` にしたときは、前と同じく元の記録をそのまま main に保存します。
+- 切り替えより前（2026-11-09〜）の元の記録は、main の過去のコミットにそのまま残っています。
 
 ## あとで検証に使う記録
 - `data/odds_pre/pre_YYYYMMDD.csv`：予想した時点（締切の約5分前）の3連単オッズ120通り。1行=1レース、`odds` は `backtest.COMBOS` の順に空白区切り（空は発売なし）

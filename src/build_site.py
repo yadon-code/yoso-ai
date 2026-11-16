@@ -9,6 +9,7 @@
     data/site/YYYYMMDD.json     その日の全レース（締切・予想・買い目・結果）
 締切を過ぎたレースは、公式サイトで結果（3連単）を調べて data/paper/results_live.csv に貯める。
 """
+import base64
 import datetime as dt
 import json
 import re
@@ -34,11 +35,24 @@ def write_site(name, obj, pw):
     text = json.dumps(obj, ensure_ascii=False)
     plain, enc = OUT / name, OUT / (name + ".enc")
     if pw:
-        enc.write_text(sitecrypt.encrypt(text, pw), encoding="ascii")
+        enc.write_text(sitecrypt.encrypt(text, pw, name), encoding="ascii")
         plain.unlink(missing_ok=True)
     else:
         plain.write_text(text, encoding="utf-8")
         enc.unlink(missing_ok=True)
+
+
+def opens(path, pw):
+    """今の合言葉で開けるファイルか。前の作り方（salt がでたらめ）のファイルは、今の作り方で書き直しておく
+    （ファイルごとに鍵を作り直すと重いため。中身は変えない）。"""
+    try:
+        blob = path.read_text(encoding="ascii")
+        text = sitecrypt.decrypt(blob, pw)
+    except Exception:
+        return False
+    if base64.b64decode(blob)[:16] != sitecrypt.SALT:
+        path.write_text(sitecrypt.encrypt(text, pw, path.name[:-4]), encoding="ascii")
+    return True
 
 
 def parse_picks(s):
@@ -112,6 +126,13 @@ def main():
     known = load_cache()
     OUT.mkdir(parents=True, exist_ok=True)
     pw = sitecrypt.password()
+    if len(sys.argv) == 1:  # 記録はあるのにウェブ用のファイルが無い日（ウェブ用データをなくしたときなど）も作り直す
+        have = {f.name[:8] for f in OUT.glob("2*.json*")}
+        if pw:  # 前の合言葉で作ったままの日（合言葉を変えたあと）も、今の合言葉で作り直す
+            have -= {f.name[:8] for f in OUT.glob("2*.json.enc") if not opens(f, pw)}
+        recs = {m.group(1) for f in PRED.glob("*.csv") if (m := re.fullmatch(r"(?:live|schedule)_(\d{8})\.csv", f.name))}
+        days = [dt.date(int(s[:4]), int(s[4:6]), int(s[6:])) for s in sorted(recs - have)
+                if s != f"{now.date():%Y%m%d}"] + days
     if pw:  # 合言葉を設定する前に作った、カギなしの過去の日のファイルにもカギをかける
         for f in OUT.glob("2*.json"):
             write_site(f.name, json.loads(f.read_text(encoding="utf-8")), pw)

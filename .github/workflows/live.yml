@@ -28,7 +28,8 @@ jobs:
     timeout-minutes: 355
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}   # ウェブアプリの合言葉（未設定ならカギなし）
+      SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}   # ウェブアプリと記録の金庫の合言葉（未設定ならカギなしで、前と同じく記録をそのまま main に保存）
+      RECORDS_MODE: vault   # legacy にすると、記録を前と同じく10分ごとに main にもそのまま保存する（もとに戻すとき用）
       TZ: Asia/Tokyo
     steps:
       # 前の回が終わるのを待ってから始まることがあるので、予約した時点ではなく「始まった時点」の最新を使う
@@ -65,6 +66,12 @@ jobs:
           if [ ! -f data/csv/programs.csv ]; then python src/parse.py; fi
           ls data/raw/K | tail -1
 
+      # 予想・エア投票などの記録を、キャッシュ（data/cache/records）・site-data ブランチ・main の金庫のうち新しいものから戻す。
+      # 戻せないとき（合言葉が変わった など）は、空から始めて記録を上書きしないよう、ここで止める。
+      - name: 予想とエア投票の記録を戻す
+        if: github.event_name == 'schedule' || inputs.mode != 'test'
+        run: python src/records.py restore
+
       - name: 予想する
         if: github.event_name == 'schedule' || inputs.mode != 'test'
         run: |
@@ -72,6 +79,7 @@ jobs:
           git config user.email "yoso-ai-bot@users.noreply.github.com"
           # 10分ごとにウェブアプリ用のデータを保存する（裏で動かす）
           ( while sleep 600; do bash scripts/push_data.sh; done ) &
+          LOOP=$!
           # 予約時刻はGitHubの都合で30〜40分遅れることがあるので、時刻ではなく「始まった時点の時刻」で部を決め、
           # 朝・昼の部は終わった瞬間に次の部を自分で呼ぶ（予約はその予備）
           HM=$(date +%H%M)
@@ -84,6 +92,7 @@ jobs:
           else
             python src/live.py
           fi
+          kill $LOOP 2>/dev/null || true   # 10分ごとの保存を止める（最後の保存は下の手順で）
           if [ "$NEXT" = 1 ]; then
             gh api -X POST repos/${{ github.repository }}/actions/workflows/live.yml/dispatches -f ref=main -f 'inputs[mode]=live' \
               && echo "次の部を呼びました"
@@ -95,6 +104,14 @@ jobs:
         if: ${{ !success() && (github.event_name == 'schedule' || inputs.mode != 'test') }}
         run: python src/notify.py "⚠️ 自動予想が途中で止まりました。次の回（朝・昼・夜）でまた動きます。くわしくは ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+      - name: 予想とエア投票の記録をリポジトリに保存
+        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')
+        # 先に記録を保存してから、その写し（data/cache/records）ごとキャッシュに入れる
+        run: |
+          git config user.name "yoso-ai bot"
+          git config user.email "yoso-ai-bot@users.noreply.github.com"
+          bash scripts/push_data.sh final
+
       - name: 過去データを保存
         if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')
         uses: actions/cache/save@v4
@@ -104,10 +121,3 @@ jobs:
             data/csv
             data/cache
           key: data-${{ github.run_id }}
-
-      - name: 予想とエア投票の記録をリポジトリに保存
-        if: always() && (github.event_name == 'schedule' || inputs.mode != 'test')
-        run: |
-          git config user.name "yoso-ai bot"
-          git config user.email "yoso-ai-bot@users.noreply.github.com"
-          bash scripts/push_data.sh final
