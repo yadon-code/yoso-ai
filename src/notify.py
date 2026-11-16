@@ -7,6 +7,7 @@
 使い方（テスト）:
     python src/notify.py "テスト通知です"
 """
+import atexit
 import json
 import os
 import sys
@@ -29,6 +30,28 @@ def _webhook():
 
 THREADS = ROOT / "data" / "discord_threads.json"  # フォーラムの部屋の名前 → 部屋のID
 
+# 送れなかった通知の数（この回＝このプログラムが動いている間の合計）。終わるときに GitHub Actions の注釈で出す。
+_failures = 0
+
+
+def failure_count() -> int:
+    """この回で送れなかった通知の数（試験・確認用）。"""
+    return _failures
+
+
+def _gh(s) -> str:
+    """GitHub Actions の注釈（::warning::）に入れられるように、改行などを置き換える。"""
+    return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _report_at_exit():
+    if _failures:
+        print(f"::warning title=Discord通知の失敗::この回で Discord への送信に {_failures} 件失敗しました"
+              "（その通知は Discord に届いていません。送信の失敗で予想は止めていません）", flush=True)
+
+
+atexit.register(_report_at_exit)
+
 
 def _post(url, payload):
     body = json.dumps(payload).encode("utf-8")
@@ -44,12 +67,14 @@ def send(text: str, room: str = "📢 お知らせ") -> bool:
     通知役（ウェブフック）がフォーラムチャンネルにある場合は、room の名前の部屋（投稿）に送る。
     部屋がなければ作り、IDを data/discord_threads.json に覚えておく。
     普通のチャンネルにある場合は、そのチャンネルにそのまま送る。"""
+    global _failures
     url = _webhook()
     if not url:
         print(f"[通知（未設定なので表示だけ）] {room}\n" + text, flush=True)
         return False
     threads = json.loads(THREADS.read_text(encoding="utf-8")) if THREADS.exists() else {}
     ok = True
+    err = None
     for i in range(0, len(text), 1900):
         chunk = {"content": text[i:i + 1900]}
         try:
@@ -70,6 +95,10 @@ def send(text: str, room: str = "📢 お知らせ") -> bool:
         except Exception as e:  # 通知の失敗で予想を止めない
             print("通知に失敗:", e, flush=True)
             ok = False
+            err = e
+    if not ok:  # 1通（長い文の分割ぶんも含めて）につき1件と数え、Actions のログで目立つ注釈にする
+        _failures += 1
+        print(f"::warning title=Discord通知の失敗::「{_gh(room)}」への送信に失敗（{_gh(err)}）", flush=True)
     return ok
 
 
@@ -105,4 +134,7 @@ def grade_message(grade, venue, race_no, race_name, deadline, p_win, p3, picks, 
 
 
 if __name__ == "__main__":
-    send(" ".join(sys.argv[1:]) or "予想AIからのテスト通知です")
+    # コマンドとして呼ばれたとき（テスト通知・「止まりました」の知らせなど）は、送れなかったら終了コード1にして
+    # Actions の手順が赤くなるようにする。予想の本体（live.py）は send() を直接呼ぶので、ここは影響しない。
+    sent = send(" ".join(sys.argv[1:]) or "予想AIからのテスト通知です")
+    sys.exit(0 if sent or not _webhook() else 1)

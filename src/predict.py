@@ -54,13 +54,80 @@ def bi_wind_index(venue_code, icon):
     return (int(icon) - 1 + BI_WIND_OFFSET[str(venue_code).zfill(2)]) % 16
 
 
-def update_history(day: dt.date):
+# 途中で取得に失敗して抜けた日（出走表Bか結果Kのファイルが無い日）を、直近この日数ぶんだけ探して取り直す。
+# 30日にした理由:
+#   - 公式サイトの一時的な不調で抜けた日は、毎朝の取り直しで数日のうちに埋まるはずなので、1か月あれば十分。
+#   - 1回に取り直す量の上限が 30日×2ファイル=60件 に収まり、公式サイトへの負荷が小さい
+#     （すでにあるファイルは通信せずに飛ばし、取るときは download.py のとおり1件ごとに待つ）。
+#   - それより古い抜けは自動では追わない（必要なら手で src/download.py を動かす）。
+GAP_CHECK_DAYS = 30
+
+
+def _missing_days(first: dt.date, last: dt.date) -> list:
+    """first〜last のうち、B か K のファイルが無い日。"""
+    out, d = [], first
+    while d <= last:
+        if any(not (download.RAW / k / f"{k}{d:%y%m%d}.TXT").exists() for k in ("B", "K")):
+            out.append(d)
+        d += dt.timedelta(days=1)
+    return out
+
+
+def _date_ranges(days: list) -> list:
+    """並んだ日付を、続いている区間 [(始め, 終わり), ...] にまとめる。"""
+    out = []
+    for d in days:
+        if out and d == out[-1][1] + dt.timedelta(days=1):
+            out[-1][1] = d
+        else:
+            out.append([d, d])
+    return [tuple(r) for r in out]
+
+
+def _report_gaps(day: dt.date, failed: dict, notify: bool):
+    """取り直しても埋まらなかった日（404 以外のエラー）を、ログに目立つ形で出し、Discord にも1日1回まで知らせる。"""
+    text = "、".join(f"{d:%m/%d}（{'・'.join(k for k, r in zip('BK', res) if str(r).startswith('error'))}）"
+                    for d, res in sorted(failed.items()))
+    print(f"::warning title=過去データの取り直し失敗::出走表(B)・結果(K)を取り直せなかった日: {text}"
+          "（明日の朝の回でもう一度試します）", flush=True)
+    if not notify:
+        return
+    flag = ROOT / "data" / "cache" / f"gap_notice_sent_{day:%Y%m%d}"  # キャッシュ側に置く（公開の置き場には上げない）
+    if flag.exists():
+        return
+    try:  # 知らせる処理で失敗しても予想は止めない
+        from notify import send
+        if send("⚠️ 過去の出走表(B)・結果(K)の取り直しに失敗した日があります: " + text
+                + "\n明日の朝の回でもう一度試します。何日も続くときは公式サイトか取得の仕組みを確認してください。"):
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.touch()
+    except Exception as e:
+        print("抜けた日の知らせに失敗:", e, flush=True)
+
+
+def update_history(day: dt.date, notify: bool = False):
+    """前日までの出走表・結果を最新にする。
+    notify=True なら、取り直しても埋まらなかった日を Discord の「お知らせ」に1日1回まで知らせる（live.py から使う）。"""
     last = day - dt.timedelta(days=1)
     have = sorted((ROOT / "data" / "raw" / "K").glob("K*.TXT"))
     start = parse.file_date(have[-1]) if have else dt.date(2024, 1, 1)
+    # start より前で、直近 GAP_CHECK_DAYS 日の中の抜けた日（start 以降はいつもの取り直しに入っている）
+    window = max(last - dt.timedelta(days=GAP_CHECK_DAYS - 1), dt.date(2024, 1, 1))
+    gaps = [d for d in _missing_days(window, last) if d < start]
+    results = {}
+    if gaps:
+        print(f"途中の抜けた日を取り直します: {len(gaps)}日（{gaps[0]}〜{gaps[-1]} の間）", flush=True)
+        for a, b in _date_ranges(gaps):
+            results.update(download.main(a.isoformat(), b.isoformat()) or {})
     if start <= last:
-        download.main(start.isoformat(), last.isoformat())
+        results.update(download.main(start.isoformat(), last.isoformat()) or {})
+    if gaps or start <= last:
         parse.main()
+    # 404（まだ公開されていない・開催なし）は今までどおり静かに飛ばす。それ以外のエラーで埋まらなかった日だけ知らせる
+    # （直近 GAP_CHECK_DAYS 日より古い日の失敗も、次からは自動で追わないので、ここで一緒に知らせる）
+    failed = {d: res for d, res in results.items() if any(str(r).startswith("error") for r in res)}
+    if failed:
+        _report_gaps(day, failed, notify)
 
 
 def todays_programs(day: dt.date) -> pd.DataFrame:

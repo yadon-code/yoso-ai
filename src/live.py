@@ -38,13 +38,13 @@ JST = dt.timezone(dt.timedelta(hours=9))
 MINUTES_BEFORE = 5
 
 
-def prepare(day):
+def prepare(day, notify=True):
     """重い準備は一度だけ。結果をファイルに保存して、途中で止まっても再利用する。"""
     cache = ROOT / "data" / "cache" / f"live_{day:%Y%m%d}.pkl"
     if cache.exists():
         prog, df = pd.read_pickle(cache)
         return prog, df
-    update_history(day)
+    update_history(day, notify=notify)  # 取り直せなかった日があれば「お知らせ」に1日1回まで知らせる
     prog = todays_programs(day)
     up = prog.copy()
     up["exhibit_time"] = np.nan
@@ -187,7 +187,7 @@ def main():
     a = ap.parse_args()
     day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(JST).date()
     print(f"{day} の準備中...", flush=True)
-    prog, df = prepare(day)
+    prog, df = prepare(day, notify=not a.no_notify)
     booster = lgb.Booster(model_file=str(ROOT / "models" / "win_model.txt"))
     mmodel = load_market_model()
     print("第2段階モデル:", "あり" if mmodel else "なし（第1段階だけで予想）", flush=True)

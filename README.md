@@ -27,7 +27,7 @@
 ├── models/
 │   └── win_model.txt    学習済みのAIモデル
 └── data/
-    └── csv/
+    └── csv/             ※ GitHub には上げない（大きいので。自動予想ではクラウドのキャッシュに置く）
         ├── programs.csv 出走表：レース前にわかる情報（1行=1艇）
         ├── results.csv  結果：着順・進入コース・展示タイム・ST（1行=1艇）
         ├── races.csv    レース情報：天候・風・波・3連単の結果と払戻金（1行=1レース）
@@ -52,7 +52,7 @@ python3 src/backtest.py                          # 回収率を検証
 
 ## 毎日の自動予想（GitHub Actions）
 
-`.github/workflows/live.yml` が毎日3回（日本時間 7:50 / 12:20 / 17:20）動き、
+`.github/workflows/live.yml` が毎日3回（日本時間 7:20 / 11:50 / 16:50 に予約。GitHub の都合で30〜45分ほど遅れて始まる）動き、
 各レースの締切5分前に予想して、買い目があれば Discord に通知します。最終レースの後に1日のまとめも届きます。
 
 - 通知先: リポジトリの Secret `DISCORD_WEBHOOK_URL`

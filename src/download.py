@@ -52,7 +52,8 @@ def fetch(kind: str, day: dt.date) -> str:
 WORKERS = 4  # 同時にダウンロードする数（サーバーの応答が遅いので少しだけ並列にする）
 
 
-def fetch_day(d: dt.date) -> None:
+def fetch_day(d: dt.date) -> list:
+    """その日の B・K を取る。結果を [Bの結果, Kの結果] で返す（"ok" / "skip" / "none"=404 / "error:..."）。"""
     res = []
     for k in ("B", "K"):
         try:
@@ -60,9 +61,11 @@ def fetch_day(d: dt.date) -> None:
         except Exception as e:  # 一時的なエラーは記録して先へ進む（再実行すれば取り直せる）
             res.append(f"error:{e}")
     print(d, *res, flush=True)
+    return res
 
 
-def main(start: str, end: str) -> None:
+def main(start: str, end: str) -> dict:
+    """start〜end の各日を取る。{日付: [Bの結果, Kの結果]} を返す（使わない呼び出し元は無視してよい）。"""
     d = dt.date.fromisoformat(start)
     last = dt.date.fromisoformat(end)
     days = []
@@ -70,7 +73,7 @@ def main(start: str, end: str) -> None:
         days.append(d)
         d += dt.timedelta(days=1)
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-        list(ex.map(fetch_day, days))
+        return dict(zip(days, ex.map(fetch_day, days)))
 
 
 if __name__ == "__main__":
