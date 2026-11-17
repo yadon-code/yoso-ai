@@ -91,9 +91,11 @@ def parse(html: str):
     return [{**b, **race} for b in boats.values()]
 
 
-def fetch_race(date, jcd, rno):
+def fetch_race(date, jcd, rno, tries=3):
+    """1レース分の直前情報を取る。tries は通信エラー時のやり直し回数。
+    live.py の「展示が出ていないときの取り直し」は、外側で間隔を空けて呼ぶので、内側は1回だけにする（公式サイトへの負荷を抑える）。"""
     url = URL.format(rno=rno, jcd=jcd, hd=date.replace("-", ""))
-    for attempt in range(3):
+    for attempt in range(tries):
         try:
             with urllib.request.urlopen(url, timeout=30) as r:
                 html = r.read().decode("utf-8", "replace")

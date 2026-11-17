@@ -105,8 +105,9 @@ def send(text: str, room: str = "📢 お知らせ") -> bool:
     return ok
 
 
-def race_message(venue, race_no, deadline, p_win, picks, tenkai=None):
-    """1レース分の買い目通知の文面。picks = [(組番, オッズ, 期待値, 確率), ...]"""
+def race_message(venue, race_no, deadline, p_win, picks, tenkai=None, note=None):
+    """1レース分の買い目通知の文面。picks = [(組番, オッズ, 期待値, 確率), ...]
+    note: 文面の最後に足す1行（展示前の予想であることの印など）。既存の文面は変えない。"""
     honmei = max(range(6), key=lambda i: p_win[i]) + 1
     lines = [f"🚤 **{venue} {race_no}R**（締切 {deadline}）",
              "1着確率: " + " / ".join(f"{i + 1}号艇 {p:.0%}" for i, p in enumerate(p_win)),
@@ -116,6 +117,8 @@ def race_message(venue, race_no, deadline, p_win, picks, tenkai=None):
     if picks:
         lines.append("買い目（各100円）:")
         lines += [f"・{c}  {o:.1f}倍  期待値{e:.2f}" for c, o, e, _ in picks]
+    if note:
+        lines.append(note)
     return "\n".join(lines)
 
 

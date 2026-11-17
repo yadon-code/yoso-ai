@@ -62,8 +62,17 @@ def save_cache(known):
                  columns=["date", "venue_code", "race_no", "trifecta", "payout", "refund"]).to_csv(CACHE, index=False)
 
 
-def settle():
-    """bets.csv の全買い目に settled / return 列をつけて返す（結果はキャッシュに保存）。"""
+def _pre_exhibit(b):
+    """展示前の予想（bets.csv の pre_exhibit=1）かどうか。古い記録には列が無いので、無い行は違う扱い。"""
+    if "pre_exhibit" not in b.columns:
+        return pd.Series(False, index=b.index)
+    return pd.to_numeric(b["pre_exhibit"], errors="coerce").fillna(0).astype(int).eq(1)
+
+
+def settle(include_pre_exhibit=False):
+    """bets.csv の全買い目に settled / return 列をつけて返す（結果はキャッシュに保存）。
+    include_pre_exhibit=False（既定）では、展示前の予想（pre_exhibit=1）を集計から外す。
+    今までのまとめ・ウェブの成績を変えないため。展示前の分も見たいときは True で呼ぶ。"""
     led = ROOT / "data" / "paper" / "bets.csv"
     if not led.exists():
         return pd.DataFrame(columns=["date", "venue_code", "race_no", "combo", "stake", "settled", "return", "refunded", "hit"])
@@ -84,6 +93,8 @@ def settle():
     b["return"] = [s if rf else (known[k][1] * s / 100 if k in known and known[k][0] == c else 0)
                    for k, c, s, rf in zip(keys, b.combo, b.stake, b.refunded)]
     b["hit"] = (b["return"] > 0) & ~b["refunded"]
+    if not include_pre_exhibit:  # 展示前の予想は、今までのまとめ・ウェブの成績に混ぜない（あとで分けて集計できる）
+        b = b[~_pre_exhibit(b)].copy()
     return b
 
 
