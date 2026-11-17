@@ -52,7 +52,7 @@ EXHIBIT_RETRY_WITHIN_MIN = 15
 # 展示が取れずに「見送り」になったレースがこの数以上の日は、1日1回まとめて知らせる。
 # ふだんは0〜2レースなので、5レース（1場分の番組に近い）を超えたら取得の不調かもしれないと知らせる。
 NO_EXHIBIT_NOTICE_MIN = 5
-PRE_EXHIBIT_NOTE = "※展示前の予想（オッズ補正なし）"
+PRE_EXHIBIT_NOTE = "※展示前の予想（第2段階のオッズ補正なし）"
 
 
 def prepare(day, notify=True):
@@ -306,6 +306,10 @@ def main():
             continue
         bi = fetch_beforeinfo(r.date, r.venue_code, int(r.race_no), r.deadline_dt)
         has_ex = has_exhibit(bi)
+        if a.once and not has_ex:
+            # 手動の1回予想（--once）では、展示前のレースは今までどおり見送る。
+            # その日の残りをすべて v1 で埋めてしまい、通知が大量になるのを避けるため。
+            continue
         if has_ex:
             g = refresh(g, bi)
         odds_rows = fetch_odds(r.date, r.venue_code, int(r.race_no))
@@ -313,6 +317,10 @@ def main():
             save_odds_snapshot(day, key, r.deadline_dt, odds_rows)
         except Exception as e:  # 保存の失敗で予想を止めない
             print("オッズの保存に失敗:", e, flush=True)
+        if dt.datetime.now(JST) > r.deadline_dt - dt.timedelta(seconds=10):
+            # 取得に時間がかかって締切が目の前に来たレースは、予想・記録・通知をしない（間に合わない買い目を出さない）
+            print(f"{r.venue} {r.race_no:>2}R 締切に間に合わないため飛ばします", flush=True)
+            continue
         p, p3, picks = predict_race(booster, g, odds_rows)
         model = "v1"
         ori = None
