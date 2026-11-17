@@ -38,6 +38,22 @@ from predict import ROOT, SETTINGS, bi_wind_index, todays_programs, update_histo
 JST = dt.timezone(dt.timedelta(hours=9))
 MINUTES_BEFORE = 5
 
+# 展示（直前情報）がまだ出ていないときの取り直し。
+# 展示は締切の数分前までに少しずつ更新されるので、最初の取得で出ていなければ待って取り直す。
+# 20秒にした理由: 公式サイトは1分ごとではなく随時更新されるが、短すぎると同じ内容を何度も取りに行くことになる。
+# 2回までにした理由: 1レースあたり最大40秒の追加で、後ろのレースの予想が締切に間に合わなくなるのを避ける。
+# 公式サイトへの追加の取得は、展示が出ていないレースだけ・最大2回（1日132レースなら最悪でも +264回/日、平常時は数回）。
+EXHIBIT_RETRIES = 2
+EXHIBIT_RETRY_WAIT = 20
+EXHIBIT_RETRY_MARGIN = 60  # 締切の60秒前までに次の取得を始められないときは、やり直さない
+# 締切までこれ以上あるときは、この時点では取り直さない（--once で何時間も前にまとめて予想するときに、
+# まだ出ていない展示を待って何度も取りに行かないため）。
+EXHIBIT_RETRY_WITHIN_MIN = 15
+# 展示が取れずに「見送り」になったレースがこの数以上の日は、1日1回まとめて知らせる。
+# ふだんは0〜2レースなので、5レース（1場分の番組に近い）を超えたら取得の不調かもしれないと知らせる。
+NO_EXHIBIT_NOTICE_MIN = 5
+PRE_EXHIBIT_NOTE = "※展示前の予想（第2段階のオッズ補正なし）"
+
 
 def prepare(day, notify=True):
     """重い準備は一度だけ。結果をファイルに保存して、途中で止まっても再利用する。"""
@@ -73,6 +89,32 @@ def refresh(g, bi):
     g["b1_exhibit_time_diff"] = g["exhibit_time_diff"].iloc[0]
     g["ex_vs_habit"] = g["exhibit_time_diff"] - g["ex_habit"]
     return g
+
+
+def has_exhibit(bi):
+    """6艇ぶんの展示タイムがそろっているか。"""
+    return len(bi) == 6 and "exhibit_time_bi" in bi.columns and bool(bi["exhibit_time_bi"].fillna(0).gt(0).all())
+
+
+def fetch_beforeinfo(date, jo, rno, deadline_dt):
+    """直前情報を取る。展示がそろっていなければ、締切に余裕がある範囲で数回やり直す。
+    展示が無くても第1段階の予想はできるので、ここで止めない（呼び出し側が has_exhibit で判定する）。"""
+    bi = pd.DataFrame(fetch_bi(date, jo, rno))
+    if has_exhibit(bi):
+        return bi
+    if deadline_dt - dt.datetime.now(JST) > dt.timedelta(minutes=EXHIBIT_RETRY_WITHIN_MIN):
+        return bi  # 締切までまだ遠いので、この時点では取り直さない
+    for n in range(EXHIBIT_RETRIES):
+        now = dt.datetime.now(JST)
+        if now + dt.timedelta(seconds=EXHIBIT_RETRY_WAIT + EXHIBIT_RETRY_MARGIN) > deadline_dt:
+            break  # 締切に近すぎるので、これ以上待たない
+        time.sleep(EXHIBIT_RETRY_WAIT)
+        # 取り直しは1回だけ通信する（fetch_race 内の3回のやり直しは初回に任せ、通信障害のときに何度も叩かない）
+        bi = pd.DataFrame(fetch_bi(date, jo, rno, tries=1))
+        if has_exhibit(bi):
+            print(f"{jo} {int(rno)}R 展示を {n + 2}回目の取得で確認", flush=True)
+            break
+    return bi
 
 
 def load_market_model():
@@ -169,14 +211,47 @@ def record(day, key, p, p3, picks, has_exhibit, model="v1", grade="", tk=None):
            "tenkai": tenkai.encode(tk[0]) if tk else "", "tenkai_note": tk[1] if tk else ""}  # 展開予想（7パターンの確率）
     # v2=第2段階（オッズのズレ補正）、v1=第1段階だけ（第2段階が使えなかったとき）
     append_rows(ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv", [row])
-    if picks and has_exhibit:  # エア投票は、展示を見たうえでの本番と同じ条件の予想だけ記録する
+    if picks:  # 展示前の予想も、買い目があればエア投票に記録する（pre_exhibit=1 の印で、あとから分けられる）
         led = ROOT / "data" / "paper" / "bets.csv"
         rows = [{"date": key[0], "venue_code": key[1], "race_no": key[2], "combo": c, "odds_at_pick": o,
                  "ev": round(e, 3), "prob": round(b, 5), "picked_at": now, "stake": 100, "model": model,
-                 "grade": grade}
+                 "grade": grade, "pre_exhibit": 0 if has_exhibit else 1}
                 for c, o, e, b in picks]
         append_rows(led, rows)
     return row
+
+
+def no_exhibit_counts(day):
+    """その日の予想記録から (展示前だったレース数, そのうち買い目がなくて見送った数) を数える。
+    朝・昼の部で記録した分も、夜の部でこのファイルを読めば入る。"""
+    path = ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv"
+    if not path.exists():
+        return 0, 0
+    d = pd.read_csv(path, dtype={"venue_code": str}, keep_default_na=False)
+    if "exhibit" not in d.columns or "picks" not in d.columns:
+        return 0, 0
+    ex = d["exhibit"].astype(str).str.strip().str.lower().isin(("true", "1"))
+    no_picks = d["picks"].astype(str).str.strip().eq("")
+    return int((~ex).sum()), int((~ex & no_picks).sum())
+
+
+def notify_no_exhibit_skips(day):
+    """展示が取れずに見送ったレースが多い日は、1日1回だけまとめて知らせる。
+    買い目があったレースは「展示前の予想」として通知済みなので、ここでは数えない。"""
+    n_all, n_skip = no_exhibit_counts(day)
+    if n_skip < NO_EXHIBIT_NOTICE_MIN:
+        return n_skip
+    flag = ROOT / "data" / "paper" / f"no_exhibit_notice_sent_{day:%Y%m%d}"
+    if flag.exists():  # 予備の回が後から動いても、同じ日の知らせは1回だけ
+        return n_skip
+    text = f"📝 今日は {n_skip} レースが展示前だったため見送りました。"
+    if n_all > n_skip:
+        text += (f"（ほかに {n_all - n_skip} レースも展示前でしたが、"
+                 "買い目があったので「展示前の予想」として通知しました）")
+    send(text)
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.touch()
+    return n_skip
 
 
 def main():
@@ -229,8 +304,12 @@ def main():
         g = df[(df.venue_code == r.venue_code) & (df.race_no == r.race_no)]
         if len(g) != 6:
             continue
-        bi = pd.DataFrame(fetch_bi(r.date, r.venue_code, int(r.race_no)))
-        has_ex = len(bi) == 6 and bi["exhibit_time_bi"].fillna(0).gt(0).all()
+        bi = fetch_beforeinfo(r.date, r.venue_code, int(r.race_no), r.deadline_dt)
+        has_ex = has_exhibit(bi)
+        if a.once and not has_ex:
+            # 手動の1回予想（--once）では、展示前のレースは今までどおり見送る。
+            # その日の残りをすべて v1 で埋めてしまい、通知が大量になるのを避けるため。
+            continue
         if has_ex:
             g = refresh(g, bi)
         odds_rows = fetch_odds(r.date, r.venue_code, int(r.race_no))
@@ -238,6 +317,10 @@ def main():
             save_odds_snapshot(day, key, r.deadline_dt, odds_rows)
         except Exception as e:  # 保存の失敗で予想を止めない
             print("オッズの保存に失敗:", e, flush=True)
+        if dt.datetime.now(JST) > r.deadline_dt - dt.timedelta(seconds=10):
+            # 取得に時間がかかって締切が目の前に来たレースは、予想・記録・通知をしない（間に合わない買い目を出さない）
+            print(f"{r.venue} {r.race_no:>2}R 締切に間に合わないため飛ばします", flush=True)
+            continue
         p, p3, picks = predict_race(booster, g, odds_rows)
         model = "v1"
         ori = None
@@ -267,8 +350,10 @@ def main():
         else:
             print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
                   f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}  展開: {tk_text or '-'}", flush=True)
-        if picks and has_ex and not a.no_notify:
-            send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text), room=f"🚤 {r.venue}")
+        if picks and not a.no_notify:
+            # 展示ありは今までどおりの文面。展示前は、既存の文面の末尾に「展示前」と分かる1行を足すだけにする。
+            note = None if has_ex else PRE_EXHIBIT_NOTE
+            send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text, note=note), room=f"🚤 {r.venue}")
         if is_big(r.grade) and has_ex and not a.no_notify:  # SG・G1は買い目がなくても予想を知らせる
             send(grade_message(r.grade, r.venue, r.race_no, r.race_name, r.deadline, p, p3, picks, tk_text), room=GRADE_ROOM)
 
@@ -283,6 +368,11 @@ def main():
             send(summary(day.isoformat()), room="📊 毎日のまとめ")
             flag.parent.mkdir(parents=True, exist_ok=True)
             flag.touch()
+
+    # 展示が取れずに見送ったレースが多かった日は、1日1回だけまとめて知らせる。
+    # --until で途中終了する朝・昼の部はここまで来ないので、数がそろう夜の部で出す。
+    if not a.once and not a.no_notify:
+        notify_no_exhibit_skips(day)
 
 
 if __name__ == "__main__":

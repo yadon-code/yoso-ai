@@ -85,6 +85,7 @@ python3 src/backtest.py                          # 回収率を検証
 ## あとで検証に使う記録
 - `data/odds_pre/pre_YYYYMMDD.csv`：予想した時点（締切の約5分前）の3連単オッズ120通り。1行=1レース、`odds` は `backtest.COMBOS` の順に空白区切り（空は発売なし）
 - 予想・エア投票の `model` 列：`v2`=第2段階（オッズのズレ補正）、`v1`=第1段階だけで出した買い目
+- エア投票の `pre_exhibit` 列：`1`=展示（直前情報）が出る前の予想、`0`=展示ありの予想、空=列を足す前の古い行（展示あり扱い）
 
 ## 🏆 グレードレース（SG・G1）
 - 毎朝、公式サイトから各場のグレードを調べ（`src/grade.py`）、出走表メモ `data/predictions/schedule_YYYYMMDD.csv` の `grade` 列に残します。
