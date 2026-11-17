@@ -1,0 +1,123 @@
+# 週1回、AIモデルを学習し直す（2026-11-17 追加）。
+# 毎日の自動予想（live.yml）とは別の仕事。予想の動きは変えない。
+#
+#   - 毎週 月曜 03:00 JST（＝日曜 18:00 UTC）に自動で学習する。GitHub の都合で30分ほど遅れることがある。
+#   - 毎日の自動予想が使っているのと同じキャッシュ（data/raw・data/csv・data/cache）を戻して学習する。
+#     キャッシュが無いときは、何もせず「データが無いので学習を見送りました」と記録して正常終了する。
+#   - 直近30日は評価用に残し（学習に使わない）、今のモデルより良くなったときだけ models/ を差し替えて main に送る。
+#     良くならないときは何も変えない。
+#   - 結果は Discord の「📢 お知らせ」に1行だけ送る。
+#   - この仕事はキャッシュを**保存しない**（live.yml が持っている新しいデータを、古い写しで上書きしないため）。
+#
+# 手で動かすとき: Actions →「モデルの自動学習（週1回）」→ Run workflow → mode を選ぶ
+#   dry = 学習と評価だけ（models/ の書き換え・commit・通知をしない。標準）
+#   run = 本番と同じ（良ければ差し替えて commit・通知する）
+name: モデルの自動学習（週1回）
+
+on:
+  schedule:
+    - cron: "0 18 * * 0"   # 日曜 18:00 UTC = 月曜 03:00 JST
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry=学習と評価だけ（保存・commit・通知なし） / run=本番と同じ（良ければ差し替えて保存・通知）"
+        type: choice
+        options:
+          - dry
+          - run
+        default: dry
+
+concurrency:
+  group: train   # 毎日の自動予想（グループ live）とは別。学習どうしは重ねない
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Tokyo
+  # 予約（schedule）は本番と同じ動き、手で動かしたときは選んだ mode
+  MODE: ${{ github.event_name == 'schedule' && 'run' || inputs.mode }}
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0   # モデルを main に送るときに rebase できるよう、履歴を取っておく
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # 毎日の自動予想（live.yml）と同じキャッシュを戻す。キーは回ごとに違い、restore-keys で最新のものを使う
+      - name: 過去データを復元
+        id: data_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/raw
+            data/csv
+            data/cache
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - name: データがそろっているか確かめる
+        id: data
+        run: |
+          if [ -s data/csv/programs.csv ] && [ -s data/csv/results.csv ] && [ -s data/csv/races.csv ]; then
+            echo "ready=1" >> "$GITHUB_OUTPUT"
+            echo "データあり: 学習に進みます"
+          else
+            echo "ready=0" >> "$GITHUB_OUTPUT"
+            echo "データなし: キャッシュに data/csv がありません（seed から作り直さず、この回は見送ります）"
+          fi
+
+      - name: 学習と評価
+        id: train
+        if: steps.data.outputs.ready == '1'
+        run: |
+          args="--holdout-days 30"
+          if [ "$MODE" = "dry" ]; then args="$args --dry"; fi
+          python src/auto_train.py $args
+
+      # キャッシュが空の回（この仕事を入れたちょっと後など）。止めずに、見送ったことだけ知らせる
+      - name: データが無いので見送る
+        if: steps.data.outputs.ready != '1'
+        run: |
+          if [ "$MODE" = "dry" ]; then
+            python src/auto_train.py --no-data --dry
+          else
+            python src/auto_train.py --no-data
+          fi
+
+      # 良くなって差し替えた回だけ、モデルと記録を main に送る（dry のときはしない）
+      - name: モデルを main に保存
+        if: env.MODE != 'dry' && steps.train.outputs.replaced == '1'
+        run: |
+          git config user.name "yoso-ai bot"
+          git config user.email "yoso-ai-bot@users.noreply.github.com"
+          git add models/win_model.txt docs/モデル更新記録.md
+          git commit -m "1着モデルの自動学習（評価30日の logloss が良くなったため差し替え）"
+          for i in 1 2 3; do
+            if git pull --rebase --autostash origin main && git push origin HEAD:main; then
+              echo "main に送りました"
+              exit 0
+            fi
+            echo "main に送れませんでした（$i 回目）。少し待ってやり直します"
+            sleep 15
+          done
+          echo "::error title=モデルの保存::main に送れませんでした（モデルはこの回の作業フォルダにだけ残っています。main は変わっていません）"
+          exit 1
+
+      - name: 止まったら知らせる
+        if: failure() && env.MODE != 'dry'
+        run: python src/notify.py "⚠️ モデルの自動学習が途中で止まりました。予想は今のモデルのまま動いています。くわしくは ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
