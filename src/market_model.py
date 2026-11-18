@@ -48,6 +48,10 @@ def make_features(df):
     """1レース6艇ぶんの行（mw=オッズの1着確率, p_win=第1段階AI, 直前情報, オリジナル展示）から特徴量を作る。
     学習（load）と当日の予想（live.py）で同じものを使う。"""
     df = df.copy()
+    # オリジナル展示を出していない場（江戸川など）は lap 等の列が無いので、空欄（学習時と同じ NaN）で用意する
+    for c in ["exh_st", "exhibit_time_bi", "tilt", "weight_day", "lap", "turn", "straight", "exh_course"]:
+        if c not in df:
+            df[c] = np.nan
     df["lap_half"] = (df["lap_kind"] == "半周ラップ").astype(float) if "lap_kind" in df else 0.0
     df["venue_code_i"] = df["venue_code"].astype(int)
     df["log_mw"] = np.log(df["mw"])
