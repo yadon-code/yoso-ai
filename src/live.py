@@ -23,6 +23,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backtest import COMBOS, TAKEOUT, harville  # noqa: E402
 from download_beforeinfo import fetch_race as fetch_bi  # noqa: E402
+from download_beforeinfo import FIELDS as BI_FIELDS  # noqa: E402
 from download_odds import fetch_race as fetch_odds  # noqa: E402
 from features import FEATURES, KEY, build  # noqa: E402
 from notify import grade_message, race_message, send  # noqa: E402
@@ -200,6 +201,27 @@ def save_odds_snapshot(day, key, deadline_dt, odds_rows):
     append_rows(ROOT / "data" / "odds_pre" / f"pre_{day:%Y%m%d}.csv", [row])
 
 
+def save_live_inputs(day, key, bi=None, ori=None, p_ai=None):
+    """予想のときに実際に見た材料を残す（第2段階を学び直すため）。data/odds_pre/ に日付入りの名前で置くので、
+    5分前オッズと同じく暗号化して金庫に入る。あとから取り直すと「予想時点では空だった展示」が埋まってしまうので、見たままを残す。
+      bi_YYYYMMDD.csv  直前情報（download_beforeinfo.FIELDS の列＋保存した時刻 fetched_at）。展示前のレースも見たまま
+      ori_YYYYMMDD.csv オリジナル展示（江戸川など公開していない場は行なし）
+      pai_YYYYMMDD.csv 第1段階AIの1着確率（1〜6号艇、空白区切り）。あとからは作り直せない
+    回が途中で止まると次の回で同じレースがもう一度入るので、学び直しでは fetched_at の新しい行を使う"""
+    now = dt.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+    base = {"date": key[0], "venue_code": key[1], "race_no": key[2], "fetched_at": now}
+    d = ROOT / "data" / "odds_pre"
+    if bi is not None and len(bi):
+        rows = [{**base, **{c: r.get(c, "") for c in BI_FIELDS[3:]}} for r in bi.to_dict("records")]
+        append_rows(d / f"bi_{day:%Y%m%d}.csv", rows)
+    if ori is not None and len(ori):
+        rows = [{**base, **{c: r.get(c, "") for c in ["boat", "lap", "turn", "straight", "lap_kind"]}}
+                for r in ori.to_dict("records")]
+        append_rows(d / f"ori_{day:%Y%m%d}.csv", rows)
+    if p_ai is not None:
+        append_rows(d / f"pai_{day:%Y%m%d}.csv", [{**base, "p_ai": " ".join(f"{x:.5f}" for x in p_ai)}])
+
+
 def record(day, key, p, p3, picks, has_exhibit, model="v1", grade="", tk=None):
     now = dt.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
     top = np.argsort(-p3)[:5]
@@ -323,6 +345,7 @@ def main():
             continue
         p, p3, picks = predict_race(booster, g, odds_rows)
         model = "v1"
+        p_ai = p
         ori = None
         if mmodel and has_ex and len(odds_rows) == 120 and all(x["odds"] for x in odds_rows):
             try:
@@ -342,6 +365,10 @@ def main():
                 tk = tenkai.predict_race(prog[(prog.venue_code == r.venue_code) & (prog.race_no == r.race_no)], bi, ori)
             except Exception as e:
                 print("展開予想でエラー:", e, flush=True)
+        try:  # 学び直し用の材料を残す（失敗しても予想は止めない）
+            save_live_inputs(day, key, bi, ori, p_ai)
+        except Exception as e:
+            print("材料の保存に失敗:", e, flush=True)
         tk_text = tenkai.text(*tk) if tk else None
         row = record(day, key, p, p3, picks, has_ex, model, r.grade, tk)
         if sitecrypt.password():  # 実行記録は公開なので、合言葉があるときは予想の中身を出さない
