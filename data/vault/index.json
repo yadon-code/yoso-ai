@@ -1,5 +1,5 @@
 {
- "content": "1f96cad0845d52475eb0b0a2083e423c3e1f3eb143e7f7bcd0306575715cb965",
+ "content": "1b51b867f1ad173ef60eaae9d3c8b8a31daba22abc9990bcbb2de5fc67b682be",
  "days": [
   "20261109",
   "20261110",
@@ -17,5 +17,5 @@
  ],
  "format": 1,
  "note": "予想・エア投票などの元の記録を、ウェブアプリと同じ合言葉で暗号化した金庫（src/records.py）",
- "saved_at": "2026-11-21T08:24:48.905402Z"
+ "saved_at": "2026-11-21T12:05:27.763400Z"
 }
