@@ -25,8 +25,9 @@ class RateLimiter:
 ERR = "!ERR"
 
 
-def get_text(url, limiter, ok_prefix=None, encoding="utf-8", tries=3, timeout=20):
-    """(text | None | ERR)。None=そのページは無い（404 や HTML のエラーページ）。ERR=通信の失敗（あとで取り直す）。"""
+def get_text(url, limiter, ok_prefix=None, encoding="utf-8", tries=3, timeout=20, missing=(404,)):
+    """(text | None | ERR)。None=そのページは無い（missing の番号や HTML のエラーページ）。ERR=通信の失敗（あとで取り直す）。
+    BOATCAST は無いファイルに 403 を返すので missing=(403, 404) で呼ぶ。"""
     for attempt in range(tries):
         limiter.wait()
         try:
@@ -37,7 +38,7 @@ def get_text(url, limiter, ok_prefix=None, encoding="utf-8", tries=3, timeout=20
                 return None
             return t
         except urllib.error.HTTPError as e:
-            if e.code == 404:
+            if e.code in missing:
                 return None
             time.sleep(5 * (attempt + 1))
         except Exception:

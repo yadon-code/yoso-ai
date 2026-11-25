@@ -49,7 +49,7 @@ def write_day(p, rows):
 
 
 def fetch_field(lim, ymd, jo, rno, k):
-    return get_text(URLS[k].format(jo=jo, ymd=ymd, rno=rno), lim, ok_prefix="data=")
+    return get_text(URLS[k].format(jo=jo, ymd=ymd, rno=rno), lim, ok_prefix="data=", missing=(403, 404))
 
 
 def do_day(day, lim, workers, fields):
