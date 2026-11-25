@@ -275,21 +275,37 @@ def early_path(day):
     return ROOT / "data" / "predictions" / f"early_{day:%Y%m%d}.csv"
 
 
-def record_early(day, key, p, picks, has_exhibit, model):
+def record_early(day, key, p, picks, has_exhibit, model, notified=False):
+    """notified: 速報を Discord に送れたか（買い目なし・通知なし・送信失敗は 0）。5分前の通知を「更新」にするかの判定に使う。"""
     row = {"date": key[0], "venue_code": key[1], "race_no": key[2],
            "predicted_at": dt.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
            "exhibit": has_exhibit, "model": model, "p_win": " ".join(f"{x:.3f}" for x in p),
-           "picks": picks_text(picks), "combos": " ".join(c for c, *_ in picks), "buy_rule": BUY_RULE}
+           "picks": picks_text(picks), "combos": " ".join(c for c, *_ in picks), "buy_rule": BUY_RULE,
+           "notified": int(bool(notified))}
     append_rows(early_path(day), [row])
 
 
 def load_early(day):
-    """前の回までに出した速報の買い目 {(場コード, レース番号): {組番,...}}（回が途中で替わっても比べられるように）。"""
+    """前の回までの速報（回が途中で替わっても比べられるように）。
+    返り値 (seen, sent):
+      seen = {(場コード, レース番号): {組番,...}}  速報の予想をしたレース（買い目なしも含む）
+      sent = {(場コード, レース番号): {組番,...}}  そのうち速報を Discord に送れたレース
+    notified 列が無い・空の古い記録（この列を足す前の行）は、買い目があれば送れたものとみなす。"""
     f = early_path(day)
     if not f.exists():
-        return {}
-    d = pd.read_csv(f, dtype={"venue_code": str, "combos": str}, keep_default_na=False)
-    return {(v, int(r)): set(c.split()) for v, r, c in zip(d.venue_code, d.race_no, d.combos)}
+        return {}, {}
+    d = pd.read_csv(f, dtype={"venue_code": str, "combos": str, "notified": str}, keep_default_na=False)
+    if "notified" not in d:
+        d["notified"] = ""
+    seen, sent = {}, {}
+    for v, r, c, n in zip(d.venue_code, d.race_no, d.combos, d.notified):
+        k = (v, int(r))
+        seen[k] = set(c.split())
+        if n == "1" or (n == "" and c):
+            sent[k] = set(c.split())
+        else:
+            sent.pop(k, None)
+    return seen, sent
 
 
 def no_exhibit_counts(day):
@@ -378,7 +394,7 @@ def main():
     print(f"対象 {len(sched)} レース（予想済み {len(done)}）", flush=True)
 
     until = dt.datetime.combine(day, dt.time(*map(int, a.until.split(":"))), JST) if a.until else None
-    early_seen = load_early(day)   # 速報を出したレース → 速報の買い目（組番の集まり）
+    early_seen, early_sent = load_early(day)   # 速報の予想をしたレース・そのうち速報を送れたレース → 買い目（組番の集まり）
     ori_cache = {}                 # 速報のときに取れたオリジナル展示（展示後は変わらないので5分前に使い回す）
     v2_errors = 0
 
@@ -439,17 +455,23 @@ def main():
         if res is None:
             return
         picks, has_ex = res["picks"], res["has_ex"]
-        try:
-            record_early(day, res["key"], res["p"], picks, has_ex, res["model"])
-        except Exception as e:
-            print("速報の記録に失敗:", e, flush=True)
-        early_seen[(r.venue_code, int(r.race_no))] = {c for c, *_ in picks}
+        k = (r.venue_code, int(r.race_no))
+        combos = {c for c, *_ in picks}
         print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
               f"速報の予想をしました（{res['model']}・買い目 {len(picks)}点）", flush=True)
+        notified = False
         if picks and not a.no_notify:
             note = EARLY_NOTE if has_ex else EARLY_NOTE + "\n" + PRE_EXHIBIT_NOTE
             tk_text = tenkai.text(*res["tk"]) if res["tk"] else None
-            send(race_message(r.venue, r.race_no, r.deadline, res["p"], picks, tk_text, note=note), room=f"🚤 {r.venue}")
+            notified = bool(send(race_message(r.venue, r.race_no, r.deadline, res["p"], picks, tk_text, note=note),
+                                 room=f"🚤 {r.venue}"))
+        early_seen[k] = combos
+        if notified:
+            early_sent[k] = combos
+        try:
+            record_early(day, res["key"], res["p"], picks, has_ex, res["model"], notified)
+        except Exception as e:
+            print("速報の記録に失敗:", e, flush=True)
 
     def final_stage(r):
         """締切5分前: 今までどおり予想してエア投票に記録する。速報を出したレースは、買い目が変わったときだけ通知する。"""
@@ -463,7 +485,9 @@ def main():
             print("材料の保存に失敗:", e, flush=True)
         tk_text = tenkai.text(*tk) if tk else None
         row = record(day, key, p, p3, picks, has_ex, model, r.grade, tk)
-        early = early_seen.get((r.venue_code, int(r.race_no)))
+        # 「更新」と比べる相手は、実際に送れた速報だけ。速報を送っていない（買い目なし・送信失敗など）ときは
+        # 5分前の買い目をふつうの通知として送る
+        early = early_sent.get((r.venue_code, int(r.race_no)))
         changed = early is not None and early != {c for c, *_ in picks}
         if sitecrypt.password():  # 実行記録は公開なので、合言葉があるときは予想の中身を出さない
             print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
@@ -475,7 +499,7 @@ def main():
         if not a.no_notify:
             pre = None if has_ex else PRE_EXHIBIT_NOTE
             if early is None:
-                # 速報を出していないレース（回の替わり目・--once など）は今までどおり: 買い目があれば通知
+                # 速報を送っていないレース（速報が買い目なし・送信失敗・回の替わり目・--once など）は今までどおり: 買い目があれば通知
                 # 展示ありは今までどおりの文面。展示前は、既存の文面の末尾に「展示前」と分かる1行を足すだけにする。
                 if picks:
                     send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text, note=pre), room=f"🚤 {r.venue}")

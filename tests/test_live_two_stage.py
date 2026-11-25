@@ -3,7 +3,8 @@
     python tests/test_live_two_stage.py     （pandas・numpy が要る。lightgbm は使わない）
 
 見ること:
-- 速報は買い目があるときだけ通知。5分前は、買い目が速報と変わったときだけ「更新」を通知（同じなら通知しない）
+- 速報は買い目があるときだけ通知。5分前は、送れた速報と買い目が変わったときだけ「更新」を通知（同じなら通知しない）。
+  速報を送っていない（買い目なし・送信失敗）ときは、5分前の買い目をふつうの通知で送る
 - エア投票（bets.csv）は5分前の買い目だけ。速報は early_YYYYMMDD.csv、10分前のオッズは pre10_YYYYMMDD.csv
 - SG は5分前の回で、買い目がなくても通知
 - 部の終わりの先にレースがあれば、10分前の予想に間に合う時刻に次の回へ渡す
@@ -45,8 +46,9 @@ RACES = [
     ("01", 1, "10:00", ["1-2-3"], ["1-2-3"]),            # 同じ → 更新なし
     ("01", 2, "10:02", ["1-2-3"], ["1-3-2"]),            # 変わった → 更新
     ("01", 3, "10:04", ["1-2-3"], []),                   # なくなった → 更新（取り消し）
-    ("01", 4, "10:06", [], ["2-1-3"]),                   # 速報なし → 5分前で出た → 更新
+    ("01", 4, "10:06", [], ["2-1-3"]),                   # 速報は買い目なしで送っていない → 5分前はふつうの通知
     ("08", 1, "10:08", [], []),                          # SG・買い目なし → SG の通知だけ
+    ("01", 6, "10:10", ["1-2-3"], ["1-2-3"]),            # 速報の送信に失敗 → 同じ買い目でも5分前にふつうの通知
     ("01", 5, "12:40", ["1-2-3"], ["1-2-3"]),            # 部の終わり（12:30）の先 → 次の回へ
 ]
 
@@ -83,6 +85,8 @@ def run(until="12:30", job_start=None):
         Clock.t += dt.timedelta(seconds=sec)
 
     def send(msg, room=None):
+        if "桐生 6R" in msg and live.EARLY_NOTE in msg:
+            return False  # 送信に失敗したことにする
         sent.append((Clock.t.strftime("%H:%M"), room, msg))
         return True
 
@@ -136,25 +140,29 @@ def test_two_stage():
     assert [t for t, _ in msgs(2)] == ["09:52", "09:57"] and live.UPDATE_NOTE in msgs(2)[1][1] and "1-3-2" in msgs(2)[1][1]
     # 3R: 速報＋取り消しの更新
     assert [t for t, _ in msgs(3)] == ["09:54", "09:59"] and live.UPDATE_NONE_NOTE in msgs(3)[1][1]
-    # 4R: 速報は買い目なしで通知なし、5分前で出たので更新
-    assert [t for t, _ in msgs(4)] == ["10:01"] and live.UPDATE_NOTE in msgs(4)[0][1]
+    # 4R: 速報は買い目なしで通知なし → 5分前は「更新」ではなくふつうの買い目の通知
+    assert [t for t, _ in msgs(4)] == ["10:01"] and "🔄" not in msgs(4)[0][1] and "⚡" not in msgs(4)[0][1]
+    # 6R: 速報の送信に失敗 → 5分前は買い目が同じでも、ふつうの買い目の通知
+    assert [t for t, _ in msgs(6)] == ["10:05"] and "🔄" not in msgs(6)[0][1] and "⚡" not in msgs(6)[0][1]
     # SG: 買い目なしでも5分前に1回だけ
     assert [t for t, _ in sg_msgs] == ["10:03"] and not msgs(1, "常滑")
     # 部の終わりの先の 5R は予想しない
     assert not msgs(5)
 
     bets = read(tmp / "data" / "paper" / "bets.csv")
-    assert sorted(zip(bets.race_no, bets.combo)) == [("1", "1-2-3"), ("2", "1-3-2"), ("4", "2-1-3")], bets
+    assert sorted(zip(bets.race_no, bets.combo)) == [("1", "1-2-3"), ("2", "1-3-2"), ("4", "2-1-3"), ("6", "1-2-3")], bets
     early = read(tmp / "data" / "predictions" / "early_20261126.csv")
-    assert list(early.race_no) == ["1", "2", "3", "4", "1"] and list(early.combos) == ["1-2-3", "1-2-3", "1-2-3", "", ""]
+    assert list(early.race_no) == ["1", "2", "3", "4", "1", "6"]
+    assert list(early.combos) == ["1-2-3", "1-2-3", "1-2-3", "", "", "1-2-3"]
+    assert list(early.notified) == ["1", "1", "1", "0", "0", "0"]
     live_rows = read(tmp / "data" / "predictions" / "live_20261126.csv")
-    assert len(live_rows) == 5
+    assert len(live_rows) == 6
     pre10 = read(tmp / "data" / "odds_pre" / "pre10_20261126.csv")
     pre5 = read(tmp / "data" / "odds_pre" / "pre_20261126.csv")
-    assert len(pre10) == 5 and len(pre5) == 5
+    assert len(pre10) == 6 and len(pre5) == 6
     assert set(pre10.seconds_before.astype(int)) == {600} and set(pre5.seconds_before.astype(int)) == {300}
-    # 取得回数: 5レース × 2回
-    assert o["calls"]["bi"] == 10 and o["calls"]["odds"] == 10, o["calls"]
+    # 取得回数: 6レース × 2回
+    assert o["calls"]["bi"] == 12 and o["calls"]["odds"] == 12, o["calls"]
     # 次の回へ: 5R（12:40 締切）の速報 12:30 の15分前 = 12:15 まで待って渡す
     assert o["handoff"] and o["end"].strftime("%H:%M") == "12:15", o["end"]
     shutil.rmtree(tmp)
@@ -166,10 +174,11 @@ def test_restart_keeps_early():
     old = live.ROOT
     live.ROOT = o["tmp"]
     try:
-        e = live.load_early(DAY)
+        seen, sent = live.load_early(DAY)
     finally:
         live.ROOT = old
-    assert e[("01", 1)] == {"1-2-3"} and e[("01", 4)] == set() and e[("08", 1)] == set(), e
+    assert seen[("01", 1)] == {"1-2-3"} and seen[("01", 4)] == set() and seen[("08", 1)] == set(), seen
+    assert set(sent) == {("01", 1), ("01", 2), ("01", 3)}, sent   # 送れた速報だけ（6R は送信失敗）
     shutil.rmtree(o["tmp"])
 
 
@@ -178,7 +187,7 @@ def test_night_part_summary():
     o = run(until=None)
     assert not o["handoff"]
     assert any(m == "まとめ" for _, _, m in o["sent"])
-    assert o["calls"]["bi"] == 12  # 6レース × 2回
+    assert o["calls"]["bi"] == 14  # 7レース × 2回
     shutil.rmtree(o["tmp"])
 
 
