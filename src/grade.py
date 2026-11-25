@@ -14,13 +14,35 @@ ROOM = "🏆 グレードレース"
 
 
 def today_grades(day: dt.date) -> dict:
-    """失敗しても予想は止めない（空の辞書を返す）。"""
+    """失敗しても予想は止めない。
+
+    公式ページが取れなかったとき（fetch_day が None・中身が読めず空）は「グレードの取得に失敗」とログに出し、
+    同じ日の前の回が残した出走表メモ（data/predictions/schedule_YYYYMMDD.csv）のグレードを使う。
+    それも無ければ空の辞書を返す。
+    """
     try:
         from download_grade import fetch_day
         _, rows = fetch_day(day)
-        return {jcd: g for _, jcd, g in (rows or [])}
+        if rows:
+            return {jcd: g for _, jcd, g in rows}
+        print("グレードの取得に失敗:", "公式ページが取れませんでした" if rows is None else "ページからグレードを読めませんでした",
+              flush=True)
     except Exception as e:
         print("グレードの取得に失敗:", e, flush=True)
+    prev = previous_grades(day)
+    print("前の回のグレードを使います:" if prev else "前の回のグレードもありません（グレードなしで続けます）",
+          "、".join(f"{k}={v}" for k, v in sorted(prev.items()) if v and v != "一般") if prev else "", flush=True)
+    return prev
+
+
+def previous_grades(day: dt.date) -> dict:
+    """同じ日の前の回が残した出走表メモから {場コード: グレード} を返す（無い・読めないときは空）。"""
+    f = ROOT / "data" / "predictions" / f"schedule_{day:%Y%m%d}.csv"
+    try:
+        d = pd.read_csv(f, dtype={"venue_code": str}, keep_default_na=False)
+        d = d[d["grade"].astype(str) != ""]
+        return dict(zip(d["venue_code"], d["grade"]))
+    except Exception:
         return {}
 
 

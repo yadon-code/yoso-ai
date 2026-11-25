@@ -32,6 +32,11 @@ jobs:
       RECORDS_MODE: vault   # legacy にすると、記録を前と同じく10分ごとに main にもそのまま保存する（もとに戻すとき用）
       TZ: Asia/Tokyo
     steps:
+      # 回の開始時刻を覚えておく。予想は「開始＋5時間20分」（src/live_plan.py の RUN_LIMIT_MIN）までに切り上げて、
+      # timeout-minutes（355分）で強制終了される前に次の回へ渡す
+      - name: 開始時刻を記録
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       # 前の回が終わるのを待ってから始まることがあるので、予約した時点ではなく「始まった時点」の最新を使う
       - uses: actions/checkout@v4
         with:
@@ -84,21 +89,21 @@ jobs:
           ( while sleep 600; do bash scripts/push_data.sh; done ) &
           LOOP=$!
           trap 'kill $LOOP 2>/dev/null || true' EXIT   # 予想が途中で落ちても、10分ごとの保存を止める（最後の保存は下の手順で）
-          # 予約時刻はGitHubの都合で30〜40分遅れることがあるので、時刻ではなく「始まった時点の時刻」で部を決め、
-          # 朝・昼の部は終わった瞬間に次の部を自分で呼ぶ（予約はその予備）
-          HM=$(date +%H%M)
+          # 予約時刻はGitHubの都合で何時間も遅れることがあるので、時刻ではなく「始まった時点の時刻」で部を決める
+          # （11:30 前＝朝の部 12:30 まで、16:30 前＝昼の部 17:30 まで、それ以降＝夜の部。src/live_plan.py）。
+          # どの回も「部の終わり」と「開始＋5時間20分」の早いほうで切り上げ、レースが残っていれば
+          # 印のファイル（HANDOFF）ができるので、次の回を自分で呼ぶ（予約はその予備）。
+          # 夜中に始まった回は、上限まで待ってから次を呼ぶ（回を連打しない）。
+          HANDOFF="$RUNNER_TEMP/live-handoff"
+          rm -f "$HANDOFF"
           if [ "${{ inputs.mode }}" = "once" ]; then
             python src/live.py --once
-          elif [ "$HM" -lt 1130 ]; then
-            python src/live.py --until 12:30; NEXT=1
-          elif [ "$HM" -lt 1630 ]; then
-            python src/live.py --until 17:30; NEXT=1
           else
-            python src/live.py
+            python src/live.py --auto --job-start "${JOB_START:-$(date +%s)}" --handoff-file "$HANDOFF"
           fi
-          if [ "$NEXT" = 1 ]; then
+          if [ -f "$HANDOFF" ]; then
             gh api -X POST repos/${{ github.repository }}/actions/workflows/live.yml/dispatches -f ref=main -f 'inputs[mode]=live' \
-              && echo "次の部を呼びました"
+              && echo "次の回を呼びました"
           fi
         env:
           GH_TOKEN: ${{ github.token }}
