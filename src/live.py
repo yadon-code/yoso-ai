@@ -59,6 +59,16 @@ EXHIBIT_RETRY_WITHIN_MIN = 15
 NO_EXHIBIT_NOTICE_MIN = 5
 PRE_EXHIBIT_NOTE = "※展示前の予想（第2段階のオッズ補正なし）"
 
+# 第2段階（v2）の買う基準の割引。5分前のオッズで計算した期待値は、確定オッズで見ると約15%甘い
+# （docs/5分前オッズの検証_20261123.md）。そこで「5分前の期待値 × EV_DISCOUNT > ev_threshold（1.0）」の買い目だけ買う
+# （＝5分前の期待値が約1.18を超えたもの）。確定オッズを予想する仕組みができるまでのつなぎ。
+# 帯ごとの割引（期待値が高いほど大きく下がる）も考えられるが、点数が少なく過学習しやすいので、単純な一律の値にする。
+# 記録・通知に出す期待値は今までどおり5分前の値（割引前）のまま。
+EV_DISCOUNT = 0.85
+# 買い方の版。予想の記録（live_*.csv）とエア投票（bets.csv）の buy_rule 列に入れて、基準を変える前後の成績を分けて比べられるようにする。
+# 列が空の行は、この列を足す前（2026-11-25 まで。v2 は「5分前の期待値 > 1.0」で買っていた）。
+BUY_RULE = "2026-11-26_v2期待値x0.85"
+
 
 def prepare(day, notify=True):
     """重い準備は一度だけ。結果をファイルに保存して、途中で止まっても再利用する。"""
@@ -156,7 +166,7 @@ def predict_race_v2(mmodel, key, p_ai, bi, ori, odds_rows):
     q = mm.trifecta_probs(pm[None, :], (pw / mw)[None, :], conf["a"], conf["b"], conf["c"])[0]
     ev = q * o
     picks = [(COMBOS[i], o[i], ev[i], q[i])
-             for i in np.where((ev > conf["ev_threshold"]) & (o <= conf["max_odds"]))[0]]
+             for i in np.where((ev * EV_DISCOUNT > conf["ev_threshold"]) & (o <= conf["max_odds"]))[0]]
     return pw, q, sorted(picks, key=lambda x: -x[2])
 
 
@@ -233,7 +243,7 @@ def record(day, key, p, p3, picks, has_exhibit, model="v1", grade="", tk=None):
            "exhibit": has_exhibit, "p_win": " ".join(f"{x:.3f}" for x in p),
            "top5": " ".join(f"{COMBOS[i]}:{p3[i]:.3f}" for i in top),
            "picks": " ".join(f"{c}({o:.1f}倍,期待値{e:.2f})" for c, o, e, _ in picks),
-           "model": model, "grade": grade,
+           "model": model, "grade": grade, "buy_rule": BUY_RULE,
            "tenkai": tenkai.encode(tk[0]) if tk else "", "tenkai_note": tk[1] if tk else ""}  # 展開予想（7パターンの確率）
     # v2=第2段階（オッズのズレ補正）、v1=第1段階だけ（第2段階が使えなかったとき）
     append_rows(ROOT / "data" / "predictions" / f"live_{day:%Y%m%d}.csv", [row])
@@ -241,7 +251,7 @@ def record(day, key, p, p3, picks, has_exhibit, model="v1", grade="", tk=None):
         led = ROOT / "data" / "paper" / "bets.csv"
         rows = [{"date": key[0], "venue_code": key[1], "race_no": key[2], "combo": c, "odds_at_pick": o,
                  "ev": round(e, 3), "prob": round(b, 5), "picked_at": now, "stake": 100, "model": model,
-                 "grade": grade, "pre_exhibit": 0 if has_exhibit else 1}
+                 "grade": grade, "pre_exhibit": 0 if has_exhibit else 1, "buy_rule": BUY_RULE}
                 for c, o, e, b in picks]
         append_rows(led, rows)
     return row
