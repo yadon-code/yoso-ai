@@ -4,6 +4,9 @@
     python src/live.py                 # 今日
     python src/live.py 2026-11-10      # 日付指定
     python src/live.py --once          # 待たずに、今の時点で締切前のレースを全部1回だけ予想
+    python src/live.py --auto --job-start <UNIX秒> --handoff-file <パス>
+                                       # 自動予想（live.yml）用: 始まった時刻で部を決め、回の開始から
+                                       # live_plan.RUN_LIMIT_MIN 分で切り上げる。レースが残ればパスにファイルを作る
 
 流れ:
     朝: 前日までのデータを更新 → 今日の出走表を取る → 過去の成績から作る特徴量を先に計算しておく（数分）
@@ -35,6 +38,7 @@ import tenkai  # noqa: E402
 from download_bc import BASE as BC_BASE, get as bc_get, parse_oriten  # noqa: E402
 from settle_live import summary  # noqa: E402
 from predict import ROOT, SETTINGS, bi_wind_index, todays_programs, update_history  # noqa: E402
+import live_plan  # noqa: E402
 
 JST = dt.timezone(dt.timedelta(hours=9))
 MINUTES_BEFORE = 5
@@ -276,13 +280,33 @@ def notify_no_exhibit_skips(day):
     return n_skip
 
 
+def hand_off(a, stop, next_target=None):
+    """この回はここまで。必要なら上限まで待ってから、次の回に任せる印（--handoff-file）を作る。"""
+    if stop:
+        wake = live_plan.handoff_wake(dt.datetime.now(JST), stop, next_target)
+        wait = (wake - dt.datetime.now(JST)).total_seconds()
+        if wait > 0:
+            print(f"次のレースまで時間があるので {wake:%H:%M} まで待ってから次の回に渡します", flush=True)
+            time.sleep(wait)
+    if a.handoff_file:
+        Path(a.handoff_file).touch()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("date", nargs="?")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--no-notify", action="store_true", help="通知を送らない")
     ap.add_argument("--until", help="この時刻(HH:MM)より後が締切のレースは次の回に任せて終わる（GitHubの1回6時間の制限用）")
+    ap.add_argument("--auto", action="store_true", help="始まった時刻で朝・昼・夜の部を決める（--until を自動で付ける）")
+    ap.add_argument("--job-start", type=int, help="回の開始時刻（UNIX秒）。ここから live_plan.RUN_LIMIT_MIN 分で必ず切り上げる")
+    ap.add_argument("--handoff-file", help="レースが残ったまま切り上げたとき、このファイルを作る（live.yml が見て次の回を呼ぶ）")
     a = ap.parse_args()
+    if a.auto and not a.until:
+        a.until = live_plan.part_until(dt.datetime.now(JST))
+    stop = live_plan.stop_by(dt.datetime.fromtimestamp(a.job_start, JST)) if a.job_start else None
+    if stop:
+        print(f"この回は {a.until or '最後'} までの締切を受け持ち、遅くとも {stop:%m/%d %H:%M} に次の回へ渡します", flush=True)
     day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(JST).date()
     print(f"{day} の準備中...", flush=True)
     prog, df = prepare(day, notify=not a.no_notify)
@@ -315,6 +339,12 @@ def main():
             continue
         if until and r.deadline_dt > until:
             print(f"{a.until} 以降のレースは次の回で予想します", flush=True)
+            hand_off(a, stop, r.deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE))
+            return
+        if stop and r.deadline_dt > stop:
+            # GitHub の制限（1回6時間）で強制終了される前に、次の回に渡す
+            print(f"{stop:%H:%M} でこの回の時間切れになるので、締切 {r.deadline} 以降のレースは次の回で予想します", flush=True)
+            hand_off(a, stop, r.deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE))
             return
         target = r.deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE)
         now = dt.datetime.now(JST)
@@ -388,6 +418,10 @@ def main():
     if not a.once and not a.no_notify and len(sched):
         end = sched["deadline_dt"].max() + dt.timedelta(minutes=20)
         now = dt.datetime.now(JST)
+        if stop and end > stop and now < end:
+            print("1日のまとめは次の回で送ります（この回の時間切れが先に来るため）", flush=True)
+            hand_off(a, stop)
+            return
         if now < end:
             time.sleep((end - now).total_seconds())
         flag = ROOT / "data" / "paper" / f"summary_sent_{day:%Y%m%d}"
