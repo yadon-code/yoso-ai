@@ -6,7 +6,8 @@
     od3    3連単の確定オッズ          od2  2連単・2連複の確定オッズ
     od1    3連複・拡連複・単勝・複勝の確定オッズ（生のまま保存）
     oriten オリジナル展示（一周・まわり足・直線）   tkz  直前情報（展示タイム・体重・チルト・スタート展示）
-保存: data_full/bc/YYYY/bc_YYYYMMDD.jsonl.gz（1行=1レース）。値は 生テキスト / null（無い）/ "!ERR"（通信失敗）
+保存: data_full/bc/YYYY/bc_YYYYMMDD.jsonl.gz（1行=1レース）。値は 生テキスト / null（無い）/ "!ERR"（通信失敗）。
+      まだ取っていないファイルはキーが無い（--fields で一部だけ先に取れる。あとで残りを取ると足される）
 - 新しい日から順に取る。できた日は飛ばし、"!ERR" が残った日はそこだけ取り直す（止まっても続きから）。
 - 全体で1秒あたり --rate 回まで（既定4回。前の download_bc.py の12並列・待ちなしより控えめ）。
 - BOATCAST は 2024年4月ごろより前のデータが無い。各日の最初の3レースが全部無ければ、その日は「無し」として記録して先へ。
@@ -51,7 +52,7 @@ def fetch_field(lim, ymd, jo, rno, k):
     return get_text(URLS[k].format(jo=jo, ymd=ymd, rno=rno), lim, ok_prefix="data=")
 
 
-def do_day(day, lim, workers):
+def do_day(day, lim, workers, fields):
     p = path_of(day)
     races = races_of(day)
     if not races:
@@ -61,7 +62,7 @@ def do_day(day, lim, workers):
         rows = read_day(p)
         if rows and rows[0].get("no_bc"):
             return "skip"
-        todo = [(i, k) for i, r in enumerate(rows) for k in URLS if r.get(k) == ERR]
+        todo = [(i, k) for i, r in enumerate(rows) for k in fields if r.get(k, ERR) == ERR]
         if not todo:
             return "skip"
     else:
@@ -70,18 +71,17 @@ def do_day(day, lim, workers):
         if all(x is None for x in probe):
             write_day(p, [{"date": day.isoformat(), "no_bc": True}])
             return "no_bc"
-        rows = [{"date": day.isoformat(), "venue_code": jo, "race_no": rno, **{k: ERR for k in URLS}}
-                for jo, rno in races]
+        rows = [{"date": day.isoformat(), "venue_code": jo, "race_no": rno} for jo, rno in races]
         for i, x in enumerate(probe):
             rows[i]["od3"] = x
-        todo = [(i, k) for i, r in enumerate(rows) for k in URLS if r[k] == ERR]
+        todo = [(i, k) for i, r in enumerate(rows) for k in fields if r.get(k, ERR) == ERR]
     with ThreadPoolExecutor(max_workers=workers) as ex:
         got = list(ex.map(lambda t: fetch_field(lim, ymd, rows[t[0]]["venue_code"], rows[t[0]]["race_no"], t[1]), todo))
     for (i, k), v in zip(todo, got):
         rows[i][k] = v
     write_day(p, rows)
-    n_err = sum(1 for r in rows for k in URLS if r.get(k) == ERR)
-    have = {k: sum(1 for r in rows if r.get(k) not in (None, ERR)) for k in URLS}
+    n_err = sum(1 for r in rows for k in fields if r.get(k, ERR) == ERR)
+    have = {k: sum(1 for r in rows if r.get(k) not in (None, ERR)) for k in fields}
     return f"{len(rows)}R " + " ".join(f"{k}{v}" for k, v in have.items()) + (f" 失敗{n_err}" if n_err else "")
 
 
@@ -91,10 +91,11 @@ def main():
     ap.add_argument("end")
     ap.add_argument("--rate", type=float, default=4.0)
     ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--fields", default=",".join(URLS), help="取るファイル（例: od3,tkz,oriten を先に、od1,od2 をあとで）")
     a = ap.parse_args()
     lim = RateLimiter(a.rate)
     for day in days(a.start, a.end):
-        r = do_day(day, lim, a.workers)
+        r = do_day(day, lim, a.workers, [f for f in a.fields.split(",") if f in URLS])
         if r and r != "skip":
             print(day, r, flush=True)
 

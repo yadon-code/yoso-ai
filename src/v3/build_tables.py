@@ -187,9 +187,12 @@ def parse_tkz(t):
         c = l.split("\t")
         if len(c) < 7:
             return None
-        adj = fnum(c[3]) if c[3].strip() not in ("0", "") else 0.0
+        try:
+            adj = float(c[3].strip()) / 10  # 調整重量（0.1kg 単位の整数。000 は調整なし）
+        except ValueError:
+            adj = np.nan
         rows.append({"boat": i + 1, "exhibit_time_bi": fnum(c[1]), "weight_day": fnum(c[4]),
-                     "adjust_weight": adj / 10 if adj == adj else np.nan, "tilt": float(c[6].replace(" ", "")) if c[6].strip() else np.nan,
+                     "adjust_weight": adj, "tilt": float(c[6].replace(" ", "")) if c[6].strip() else np.nan,
                      "exh_course": np.nan, "exh_st": np.nan, "exh_st_f": 0})
     st = [x.strip() for x in lines[8].split("\t")] if len(lines) > 8 else []
     for k in range(0, len(st) - 1, 3):

@@ -17,8 +17,11 @@ if [ "$WHAT" = base ]; then
   "$PY" src/v3/collect_kibetsu.py
   "$PY" src/v3/collect_grade.py 2022-01-01 "$END"
 elif [ "$WHAT" = bc ]; then
-  "$PY" src/v3/collect_bc.py 2024-01-01 "$END"
+  "$PY" src/v3/collect_bc.py 2024-01-01 "$END" --fields od3,tkz,oriten --rate 5
+  zsh scripts/v3_sync.sh
   "$PY" src/v3/collect_official.py 2024-01-01 2024-06-30
+  zsh scripts/v3_sync.sh
+  "$PY" src/v3/collect_bc.py 2024-01-01 "$END" --fields od1,od2 --rate 4
 fi
 zsh scripts/v3_sync.sh
 echo "== $WHAT 終わり $(date '+%F %T')"
