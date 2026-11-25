@@ -16,6 +16,7 @@ JST = lp.JST
 DAY = dt.date(2026, 11, 26)
 TIMEOUT_MIN = 355
 MINUTES_BEFORE = 5      # live.py と同じ（締切の5分前に予想）
+EARLY_MINUTES_BEFORE = 10  # live.py と同じ（締切の10分前に速報。次の回へ渡す時刻はこちらに合わせる）
 SAVE_MIN = 10           # 切り上げたあとの記録の保存・キャッシュの保存に見込む時間（多めに）
 STARTUP_MIN = 6         # 次の回が呼ばれてから予想を始められるまで（準備が一番長い日で約5分）
 
@@ -48,7 +49,7 @@ def run_once(start):
         if now > d:
             continue  # 締切を過ぎたレースは飛ばす（抜け）
         if (until and d > until) or d > stop:
-            wake = lp.handoff_wake(now, stop, d - dt.timedelta(minutes=MINUTES_BEFORE))
+            wake = lp.handoff_wake(now, stop, d - dt.timedelta(minutes=EARLY_MINUTES_BEFORE))
             return done, wake, wake
         now = max(now, d - dt.timedelta(minutes=MINUTES_BEFORE)) + dt.timedelta(seconds=30)  # 1レース30秒
         done.append(d)

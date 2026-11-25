@@ -10,7 +10,9 @@
 
 流れ:
     朝: 前日までのデータを更新 → 今日の出走表を取る → 過去の成績から作る特徴量を先に計算しておく（数分）
-    各レースの締切 MINUTES_BEFORE 分前: 展示タイム・気象・最新オッズを取り、展示に関わる特徴量だけ計算し直して予想
+    各レースの締切 EARLY_MINUTES_BEFORE 分前: そのとき取れる展示・オッズで予想し、買い目を「速報」として通知（記録は別ファイル）
+    各レースの締切 MINUTES_BEFORE 分前: 展示タイム・気象・最新オッズを取り直し、展示に関わる特徴量だけ計算し直して予想。
+                                     エア投票はこの買い目で記録し、買い目が速報と変わったときだけ「更新」を通知
     結果: data/predictions/live_YYYYMMDD.csv（全レースの予想）と data/paper/bets.csv（エア投票）
 """
 import argparse
@@ -42,6 +44,11 @@ import live_plan  # noqa: E402
 
 JST = dt.timezone(dt.timedelta(hours=9))
 MINUTES_BEFORE = 5
+# 速報（買い目の1回目の通知）を出す時刻。締切のこれだけ前。エア投票の記録には使わない
+EARLY_MINUTES_BEFORE = 10
+EARLY_NOTE = "⚡ 速報（締切10分前の予想。5分前に買い目が変われば「更新」を送ります）"
+UPDATE_NOTE = "🔄 更新（締切5分前の予想で、速報から買い目が変わりました。こちらが最終です）"
+UPDATE_NONE_NOTE = "🔄 更新（締切5分前の予想で、買い目がなくなりました。速報の買い目は取り消しです）"
 
 # 展示（直前情報）がまだ出ていないときの取り直し。
 # 展示は締切の数分前までに少しずつ更新されるので、最初の取得で出ていなければ待って取り直す。
@@ -111,11 +118,12 @@ def has_exhibit(bi):
     return len(bi) == 6 and "exhibit_time_bi" in bi.columns and bool(bi["exhibit_time_bi"].fillna(0).gt(0).all())
 
 
-def fetch_beforeinfo(date, jo, rno, deadline_dt):
+def fetch_beforeinfo(date, jo, rno, deadline_dt, retry=True):
     """直前情報を取る。展示がそろっていなければ、締切に余裕がある範囲で数回やり直す。
-    展示が無くても第1段階の予想はできるので、ここで止めない（呼び出し側が has_exhibit で判定する）。"""
+    展示が無くても第1段階の予想はできるので、ここで止めない（呼び出し側が has_exhibit で判定する）。
+    retry=False（10分前の速報）のときは取り直さない（5分前にもう一度取るので、公式サイトへの取得を増やさない）。"""
     bi = pd.DataFrame(fetch_bi(date, jo, rno))
-    if has_exhibit(bi):
+    if has_exhibit(bi) or not retry:
         return bi
     if deadline_dt - dt.datetime.now(JST) > dt.timedelta(minutes=EXHIBIT_RETRY_WITHIN_MIN):
         return bi  # 締切までまだ遠いので、この時点では取り直さない
@@ -202,9 +210,10 @@ def append_rows(path, rows):
     new.to_csv(path, mode="a", header=not path.exists(), index=False, encoding="utf-8")
 
 
-def save_odds_snapshot(day, key, deadline_dt, odds_rows):
+def save_odds_snapshot(day, key, deadline_dt, odds_rows, prefix="pre"):
     """予想した時点（締切の数分前）の3連単オッズ120通りを保存する。あとからは取り直せないデータ。
-    1行=1レース。odds は backtest.COMBOS の順に空白区切り。"""
+    1行=1レース。odds は backtest.COMBOS の順に空白区切り。
+    prefix: 5分前は pre_YYYYMMDD.csv（今までどおり）、10分前の速報は pre10_YYYYMMDD.csv に分けて置く。"""
     if len(odds_rows) != 120:
         return
     now = dt.datetime.now(JST)
@@ -212,7 +221,7 @@ def save_odds_snapshot(day, key, deadline_dt, odds_rows):
     row = {"date": key[0], "venue_code": key[1], "race_no": key[2], "fetched_at": now.strftime("%Y-%m-%d %H:%M:%S"),
            "seconds_before": int((deadline_dt - now).total_seconds()),
            "odds": " ".join("" if pd.isna(x) else f"{x:g}" for x in o)}
-    append_rows(ROOT / "data" / "odds_pre" / f"pre_{day:%Y%m%d}.csv", [row])
+    append_rows(ROOT / "data" / "odds_pre" / f"{prefix}_{day:%Y%m%d}.csv", [row])
 
 
 def save_live_inputs(day, key, bi=None, ori=None, p_ai=None):
@@ -255,6 +264,32 @@ def record(day, key, p, p3, picks, has_exhibit, model="v1", grade="", tk=None):
                 for c, o, e, b in picks]
         append_rows(led, rows)
     return row
+
+
+def picks_text(picks):
+    return " ".join(f"{c}({o:.1f}倍,期待値{e:.2f})" for c, o, e, _ in picks)
+
+
+def early_path(day):
+    """10分前の速報の記録（エア投票には入れない。5分前の買い目とあとで比べる用）。"""
+    return ROOT / "data" / "predictions" / f"early_{day:%Y%m%d}.csv"
+
+
+def record_early(day, key, p, picks, has_exhibit, model):
+    row = {"date": key[0], "venue_code": key[1], "race_no": key[2],
+           "predicted_at": dt.datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
+           "exhibit": has_exhibit, "model": model, "p_win": " ".join(f"{x:.3f}" for x in p),
+           "picks": picks_text(picks), "combos": " ".join(c for c, *_ in picks), "buy_rule": BUY_RULE}
+    append_rows(early_path(day), [row])
+
+
+def load_early(day):
+    """前の回までに出した速報の買い目 {(場コード, レース番号): {組番,...}}（回が途中で替わっても比べられるように）。"""
+    f = early_path(day)
+    if not f.exists():
+        return {}
+    d = pd.read_csv(f, dtype={"venue_code": str, "combos": str}, keep_default_na=False)
+    return {(v, int(r)): set(c.split()) for v, r, c in zip(d.venue_code, d.race_no, d.combos)}
 
 
 def no_exhibit_counts(day):
@@ -343,53 +378,42 @@ def main():
     print(f"対象 {len(sched)} レース（予想済み {len(done)}）", flush=True)
 
     until = dt.datetime.combine(day, dt.time(*map(int, a.until.split(":"))), JST) if a.until else None
+    early_seen = load_early(day)   # 速報を出したレース → 速報の買い目（組番の集まり）
+    ori_cache = {}                 # 速報のときに取れたオリジナル展示（展示後は変わらないので5分前に使い回す）
     v2_errors = 0
-    for _, r in sched.iterrows():
-        if (r.venue_code, r.race_no) in done:
-            continue
-        if until and r.deadline_dt > until:
-            print(f"{a.until} 以降のレースは次の回で予想します", flush=True)
-            hand_off(a, stop, r.deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE))
-            return
-        if stop and r.deadline_dt > stop:
-            # GitHub の制限（1回6時間）で強制終了される前に、次の回に渡す
-            print(f"{stop:%H:%M} でこの回の時間切れになるので、締切 {r.deadline} 以降のレースは次の回で予想します", flush=True)
-            hand_off(a, stop, r.deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE))
-            return
-        target = r.deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE)
-        now = dt.datetime.now(JST)
-        if now > r.deadline_dt:
-            continue  # 締切を過ぎたレースは飛ばす
-        if not a.once and now < target:
-            time.sleep((target - now).total_seconds())
+
+    def predict_now(r, early):
+        """今の時点の直前情報・オッズで予想する。予想できないときは None。"""
+        nonlocal v2_errors
         key = (r.date, r.venue_code, r.race_no)
         g = df[(df.venue_code == r.venue_code) & (df.race_no == r.race_no)]
         if len(g) != 6:
-            continue
-        bi = fetch_beforeinfo(r.date, r.venue_code, int(r.race_no), r.deadline_dt)
+            return None
+        bi = fetch_beforeinfo(r.date, r.venue_code, int(r.race_no), r.deadline_dt, retry=not early)
         has_ex = has_exhibit(bi)
         if a.once and not has_ex:
             # 手動の1回予想（--once）では、展示前のレースは今までどおり見送る。
             # その日の残りをすべて v1 で埋めてしまい、通知が大量になるのを避けるため。
-            continue
+            return None
         if has_ex:
             g = refresh(g, bi)
         odds_rows = fetch_odds(r.date, r.venue_code, int(r.race_no))
         try:
-            save_odds_snapshot(day, key, r.deadline_dt, odds_rows)
+            save_odds_snapshot(day, key, r.deadline_dt, odds_rows, prefix="pre10" if early else "pre")
         except Exception as e:  # 保存の失敗で予想を止めない
             print("オッズの保存に失敗:", e, flush=True)
         if dt.datetime.now(JST) > r.deadline_dt - dt.timedelta(seconds=10):
             # 取得に時間がかかって締切が目の前に来たレースは、予想・記録・通知をしない（間に合わない買い目を出さない）
             print(f"{r.venue} {r.race_no:>2}R 締切に間に合わないため飛ばします", flush=True)
-            continue
+            return None
         p, p3, picks = predict_race(booster, g, odds_rows)
         model = "v1"
         p_ai = p
-        ori = None
+        ori = ori_cache.get(key)
         if mmodel and has_ex and len(odds_rows) == 120 and all(x["odds"] for x in odds_rows):
             try:
-                ori = fetch_oriten(r.date, r.venue_code, r.race_no)
+                if ori is None:
+                    ori = fetch_oriten(r.date, r.venue_code, r.race_no)
                 p, p3, picks = predict_race_v2(mmodel, key, p, bi, ori, odds_rows)
                 model = "v2"
             except Exception as e:  # 第2段階で失敗したら第1段階の結果を使う
@@ -405,24 +429,92 @@ def main():
                 tk = tenkai.predict_race(prog[(prog.venue_code == r.venue_code) & (prog.race_no == r.race_no)], bi, ori)
             except Exception as e:
                 print("展開予想でエラー:", e, flush=True)
+        if ori is not None and len(ori):
+            ori_cache[key] = ori
+        return dict(key=key, bi=bi, has_ex=has_ex, p=p, p3=p3, picks=picks, model=model, p_ai=p_ai, ori=ori, tk=tk)
+
+    def early_stage(r):
+        """締切10分前: 予想して、買い目があれば「速報」として通知する。エア投票には記録しない。"""
+        res = predict_now(r, early=True)
+        if res is None:
+            return
+        picks, has_ex = res["picks"], res["has_ex"]
+        try:
+            record_early(day, res["key"], res["p"], picks, has_ex, res["model"])
+        except Exception as e:
+            print("速報の記録に失敗:", e, flush=True)
+        early_seen[(r.venue_code, int(r.race_no))] = {c for c, *_ in picks}
+        print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
+              f"速報の予想をしました（{res['model']}・買い目 {len(picks)}点）", flush=True)
+        if picks and not a.no_notify:
+            note = EARLY_NOTE if has_ex else EARLY_NOTE + "\n" + PRE_EXHIBIT_NOTE
+            tk_text = tenkai.text(*res["tk"]) if res["tk"] else None
+            send(race_message(r.venue, r.race_no, r.deadline, res["p"], picks, tk_text, note=note), room=f"🚤 {r.venue}")
+
+    def final_stage(r):
+        """締切5分前: 今までどおり予想してエア投票に記録する。速報を出したレースは、買い目が変わったときだけ通知する。"""
+        res = predict_now(r, early=False)
+        if res is None:
+            return
+        key, p, p3, picks, has_ex, model, tk = (res[k] for k in ("key", "p", "p3", "picks", "has_ex", "model", "tk"))
         try:  # 学び直し用の材料を残す（失敗しても予想は止めない）
-            save_live_inputs(day, key, bi, ori, p_ai)
+            save_live_inputs(day, key, res["bi"], res["ori"], res["p_ai"])
         except Exception as e:
             print("材料の保存に失敗:", e, flush=True)
         tk_text = tenkai.text(*tk) if tk else None
         row = record(day, key, p, p3, picks, has_ex, model, r.grade, tk)
+        early = early_seen.get((r.venue_code, int(r.race_no)))
+        changed = early is not None and early != {c for c, *_ in picks}
         if sitecrypt.password():  # 実行記録は公開なので、合言葉があるときは予想の中身を出さない
             print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
-                  f"予想しました（{model}・買い目 {len(picks)}点）", flush=True)
+                  f"予想しました（{model}・買い目 {len(picks)}点"
+                  f"{'' if early is None else '・速報から変更あり' if changed else '・速報と同じ'}）", flush=True)
         else:
             print(f"{r.venue} {r.race_no:>2}R 締切{r.deadline} 展示{'あり' if has_ex else 'なし'} "
                   f"1着確率[{row['p_win']}]  買い目: {row['picks'] or 'なし'}  展開: {tk_text or '-'}", flush=True)
-        if picks and not a.no_notify:
-            # 展示ありは今までどおりの文面。展示前は、既存の文面の末尾に「展示前」と分かる1行を足すだけにする。
-            note = None if has_ex else PRE_EXHIBIT_NOTE
-            send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text, note=note), room=f"🚤 {r.venue}")
-        if is_big(r.grade) and has_ex and not a.no_notify:  # SG・G1は買い目がなくても予想を知らせる
+        if not a.no_notify:
+            pre = None if has_ex else PRE_EXHIBIT_NOTE
+            if early is None:
+                # 速報を出していないレース（回の替わり目・--once など）は今までどおり: 買い目があれば通知
+                # 展示ありは今までどおりの文面。展示前は、既存の文面の末尾に「展示前」と分かる1行を足すだけにする。
+                if picks:
+                    send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text, note=pre), room=f"🚤 {r.venue}")
+            elif changed:
+                note = (UPDATE_NOTE if picks else UPDATE_NONE_NOTE) + ("\n" + pre if pre else "")
+                send(race_message(r.venue, r.race_no, r.deadline, p, picks, tk_text, note=note), room=f"🚤 {r.venue}")
+        if is_big(r.grade) and has_ex and not a.no_notify:  # SG・G1は買い目がなくても予想を知らせる（5分前の回だけ）
             send(grade_message(r.grade, r.venue, r.race_no, r.race_name, r.deadline, p, p3, picks, tk_text), room=GRADE_ROOM)
+
+    # この回が受け持つレース（部の終わり・回の時間切れまでに締切が来るもの）と、次の回に渡すレースに分ける
+    todo = [r for _, r in sched.iterrows() if (r.venue_code, r.race_no) not in done]
+    beyond = [(until and r.deadline_dt > until) or (stop and r.deadline_dt > stop) for r in todo]
+    mine = [r for r, x in zip(todo, beyond) if not x]
+    later = [r for r, x in zip(todo, beyond) if x]
+    # 1レースに2回（10分前の速報・5分前の本番）。時刻の順に並べて、間のレースと交互に進める
+    events = []
+    for r in mine:
+        if not a.once and (r.venue_code, int(r.race_no)) not in early_seen:
+            events.append((r.deadline_dt - dt.timedelta(minutes=EARLY_MINUTES_BEFORE), r.deadline_dt, 0, r))
+        events.append((r.deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE), r.deadline_dt, 1, r))
+    events.sort(key=lambda x: x[:3])
+    for target, deadline_dt, final, r in events:
+        now = dt.datetime.now(JST)
+        if now > deadline_dt:
+            continue  # 締切を過ぎたレースは飛ばす
+        if not final and now > deadline_dt - dt.timedelta(minutes=MINUTES_BEFORE):
+            continue  # 速報の時刻を過ぎて5分前の予想の時刻になっていたら、速報は出さない
+        if not a.once and now < target:
+            time.sleep((target - now).total_seconds())
+        (final_stage if final else early_stage)(r)
+    if later:
+        r = min(later, key=lambda x: x.deadline_dt)
+        if until and r.deadline_dt > until:
+            print(f"{a.until} 以降のレースは次の回で予想します", flush=True)
+        else:
+            # GitHub の制限（1回6時間）で強制終了される前に、次の回に渡す
+            print(f"{stop:%H:%M} でこの回の時間切れになるので、締切 {r.deadline} 以降のレースは次の回で予想します", flush=True)
+        hand_off(a, stop, r.deadline_dt - dt.timedelta(minutes=EARLY_MINUTES_BEFORE))
+        return
 
     # 最終レースの結果が出るころ（締切から20分後）に、1日のまとめを通知する
     if not a.once and not a.no_notify and len(sched):
