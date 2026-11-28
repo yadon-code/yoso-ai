@@ -51,12 +51,16 @@ def boot_mean(x, days, n=1000):
 
 def boot_ratio(num, den, days, n=1000):
     d = pd.DataFrame({"a": num, "b": den, "d": days}).groupby("d")[["a", "b"]].sum().to_numpy()
+    if d[:, 1].sum() == 0:  # 1点も買わなかった
+        return np.nan, np.nan, np.nan
     est = d[:, 0].sum() / max(d[:, 1].sum(), 1e-9)
     bs = []
     for _ in range(n):
         s = d[RNG.integers(0, len(d), len(d))]
         if s[:, 1].sum() > 0:
             bs.append(s[:, 0].sum() / s[:, 1].sum())
+    if not bs:
+        return est, np.nan, np.nan
     return est, np.percentile(bs, 2.5), np.percentile(bs, 97.5)
 
 
