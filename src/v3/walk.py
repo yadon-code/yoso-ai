@@ -60,6 +60,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True)
     ap.add_argument("--market", action="store_true", help="確定オッズから出した確率を材料に足す")
+    ap.add_argument("--offset", action="store_true", help="市場の確率を出発点にして、ずれだけを学ぶ（--market も入る）")
     ap.add_argument("--pre-exhibit", action="store_true", help="展示の材料を使わない（朝の予想用）")
     ap.add_argument("--step", type=int, default=1, help="何か月ごとに学習し直すか")
     ap.add_argument("--open-holdout", action="store_true")
@@ -68,6 +69,7 @@ def main():
     feats = [f for f in FEATURES if f not in set(a.drop.split(","))]
     if a.pre_exhibit:
         feats = [f for f in feats if f not in PRE_EXHIBIT_DROP and not any(p in f for p in PRE_EXHIBIT_DROP)]
+    a.market = a.market or a.offset
     df = load(a.market)
     out = WORK / a.name
     out.mkdir(parents=True, exist_ok=True)
@@ -75,7 +77,7 @@ def main():
     if a.open_holdout:
         with (WORK / "holdout_opened.log").open("a", encoding="utf-8") as f:
             f.write(f"{dt.datetime.now():%F %T} {a.name} を金庫の期間（{HOLDOUT_START}〜）で予想\n")
-    meta = {"features": feats, "market": a.market, "step": a.step, "folds": []}
+    meta = {"features": feats, "market": a.market, "offset": a.offset, "step": a.step, "folds": []}
     for es, s, e in folds(a.step, end, a.open_holdout):
         p = out / f"pred_{s}.parquet"
         if p.exists():
@@ -85,7 +87,7 @@ def main():
         te = df[(df.date >= s) & (df.date < e)]
         if te.empty:
             continue
-        m = TrifectaModel(feats, use_market=a.market).fit(tr, ev)
+        m = TrifectaModel(feats, use_market=a.market, offset=a.offset).fit(tr, ev)
         keys, q = m.predict(te)
         res = pd.DataFrame(q.astype(np.float32), columns=COMBOS)
         res = pd.concat([keys, res], axis=1)

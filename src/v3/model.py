@@ -7,6 +7,8 @@
     P2・P3 には「1着（と2着）が誰か」の情報を足す（1号艇が逃げたときと、4号艇がまくったときでは2着の来方が違うため）。
 
 市場（オッズ）あり版: use_market=True で、オッズから出した「1着・2着・3着の確率」を特徴量に足す。
+市場を出発点にする版: offset=True（use_market も必要）。各段階で「市場の条件つき確率」を出発点（init_score）にし、
+    モデルは市場からの「ずれ」だけを学ぶ（v2 と同じ考え）。ずれが0なら、市場の確率そのものになる。
 """
 from itertools import permutations
 
@@ -45,6 +47,12 @@ def marginals(q120):
     return p1, p2c, p3c
 
 
+def offset_of(F):
+    """特徴量の最後の列（市場の確率の対数）→ logit（init_score 用）。"""
+    m = np.clip(np.exp(F[..., -1].astype(np.float64)), 1e-6, 1 - 1e-6)
+    return np.log(m) - np.log1p(-m)
+
+
 def race_arrays(df):
     """1レース6行にそろえた表 → (レース数, 6, 特徴量) の配列と、着順 (レース数,6)。"""
     df = df.sort_values(KEY + ["boat"])
@@ -57,9 +65,12 @@ def _stack(X1, extra_cols):
 
 
 class TrifectaModel:
-    def __init__(self, features=None, use_market=False, params=None, rounds=3000):
+    def __init__(self, features=None, use_market=False, params=None, rounds=3000, offset=False):
         self.features = list(features or FEATURES)
-        self.use_market = use_market
+        self.use_market = use_market or offset
+        self.offset = offset
+        if offset:  # ずれだけを学ぶので、強めにおさえる（v2 と同じくらい）
+            params = {"learning_rate": 0.02, "num_leaves": 15, "min_data_in_leaf": 500, "lambda_l2": 10.0, **(params or {})}
         self.params = {**PARAMS, **(params or {})}
         self.rounds = rounds
         self.boosters = [None, None, None]
@@ -128,8 +139,11 @@ class TrifectaModel:
         for s in (1, 2, 3):
             Ft, yt = self.stage_rows(Xt, ft, mkt, s)
             Fe, ye = self.stage_rows(Xe, fe, mke, s)
-            dt = lgb.Dataset(Ft, yt, free_raw_data=True)
-            de = lgb.Dataset(Fe, ye, reference=dt)
+            it = ie = None
+            if self.offset:
+                it, ie = offset_of(Ft), offset_of(Fe)
+            dt = lgb.Dataset(Ft, yt, init_score=it, free_raw_data=True)
+            de = lgb.Dataset(Fe, ye, init_score=ie, reference=dt)
             b = lgb.train(self.params, dt, self.rounds, valid_sets=[de],
                           callbacks=[lgb.early_stopping(100, verbose=False)])
             self.boosters[s - 1] = b
@@ -144,7 +158,13 @@ class TrifectaModel:
 
         def score(stage, F):
             b = self.boosters[stage - 1]
-            return b.predict(F.reshape(-1, F.shape[-1]), raw_score=True, num_iteration=b.best_iteration).reshape(F.shape[:-1])
+            r = b.predict(F.reshape(-1, F.shape[-1]), raw_score=True, num_iteration=b.best_iteration).reshape(F.shape[:-1])
+            if self.offset:
+                # 市場を出発点にした確率 sigmoid(ずれ + logit(市場))。あとで残った艇の中で合計1にする。
+                # ここでは log(確率) を返す（下の exp・正規化と組み合わせると、正規化した確率になる）
+                z = r + offset_of(F)
+                return -np.logaddexp(0, -z)
+            return r
 
         # 1着
         extra = [np.broadcast_to(boats, (n, 6)).astype(np.float32)]
