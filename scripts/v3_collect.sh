@@ -6,6 +6,8 @@
 #     nohup caffeinate -i zsh scripts/v3_collect.sh bc > ~/Desktop/競艇AI/data_full/logs/collect_bc.log 2>&1 &
 # 同じ種類を2つ同時に動かさないこと。
 # caffeinate -i: 動いている間は Mac が勝手に眠らないようにする（ふたを閉じたときや再起動では止まる → もう一度動かす）。
+# 全体を { } でくくって最初に全部読ませる（動いている最中にこのファイルを書き換えても壊れないように）
+{
 set -u
 cd "$(dirname "$0")/.."
 PY="${PY:-$HOME/Desktop/競艇AI/venv/bin/python}"
@@ -25,3 +27,5 @@ elif [ "$WHAT" = bc ]; then
 fi
 zsh scripts/v3_sync.sh
 echo "== $WHAT 終わり $(date '+%F %T')"
+exit
+}
